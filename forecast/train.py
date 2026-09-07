@@ -4,7 +4,12 @@ import logging
 import pandas as pd
 
 from data.extract import get_daily_sellin, get_region_monthly_targets, get_calendar
-from data.validation import validate_daily_sellin, validate_targets
+from data.validation import (
+    validate_daily_sellin,
+    validate_targets,
+    validate_region_alignment,
+    validate_calendar,
+)
 from data.aggregation import to_monthly, complete_month_panel
 from features.historical import build_historical_features
 from features.working_day import historical_working_days_per_month
@@ -23,7 +28,11 @@ def run_training_pipeline() -> dict:
     logger.info("Extracting %d months of region-level Sell-In history...", history_months)
     daily = validate_daily_sellin(get_daily_sellin(history_months))
     targets = validate_targets(get_region_monthly_targets(history_months))
-    calendar = get_calendar(history_months)
+    calendar = validate_calendar(
+        get_calendar(history_months),
+        required_checkpoints=FORECAST_CONFIG["backtest_checkpoints"],
+    )
+    validate_region_alignment(daily, targets)
 
     if daily.empty:
         raise ValueError("No Sell-In history available for the configured period.")
