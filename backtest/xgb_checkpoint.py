@@ -87,8 +87,8 @@ def rolling_xgb_checkpoint_backtest(
     Each target-month model is fitted once on all eligible regions using only
     observations strictly before that month. The target-month feature rows use
     closed history plus the target month's calendar only. Daily Sell-In is
-    intentionally not used here, so no target-month future can leak into the
-    XGBoost features.
+    accepted for API compatibility and checkpoint-date validation, but is not
+    used as an XGBoost feature in this history-only candidate.
     """
     monthly = monthly_history.copy()
     monthly["periode"] = pd.to_datetime(monthly["periode"])
@@ -127,6 +127,11 @@ def rolling_xgb_checkpoint_backtest(
             continue
 
         actuals = monthly.loc[monthly["periode"] == target_month].groupby(group_cols)["monthly_value"].sum()
+        if len(group_cols) == 1:
+            actual_map = {(key,): float(value) for key, value in actuals.items()}
+        else:
+            actual_map = {key if isinstance(key, tuple) else (key,): float(value) for key, value in actuals.items()}
+
         for cp in checkpoints:
             cp_date = _checkpoint_date(calendar, target_month, cp)
             if cp_date is None:
@@ -135,12 +140,12 @@ def rolling_xgb_checkpoint_backtest(
                 key = key if isinstance(key, tuple) else (key,)
                 if key not in eligible_keys:
                     continue
-                actual = actuals.get(key)
+                actual = actual_map.get(key)
                 if actual is None or pd.isna(actual):
                     continue
                 pred = predict_xgboost(model, row)
                 if pred is not None and np.isfinite(pred):
-                    pair_store[key][cp].append((float(actual), float(pred)))
+                    pair_store[key][cp].append((actual, float(pred)))
 
     results = []
     for key, cp_pairs in pair_store.items():
