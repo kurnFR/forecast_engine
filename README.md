@@ -56,19 +56,30 @@ authoritative regional target.
     residual is never available to its interval calibration.
 18. The strict interval backtest is integrated into the training pipeline as
     `interval_backtest_results`, with interval width and normalized width diagnostics.
+19. **Checkpoint-aware XGBoost is now implemented.** Each WD4/7/10/15/20 model is
+    trained from historical target-month examples using only information available
+    through that checkpoint, including MTD Sell-In, elapsed/remaining working days,
+    daily run-rate, projected EOM run-rate, authoritative target and MTD target
+    achievement. The scored target month is excluded from model training.
+20. Production prediction selects the latest available checkpoint model based on
+    current working-day progress and falls back to the history-only XGBoost model
+    when a checkpoint model is unavailable.
+21. Regression tests cover checkpoint MTD leakage and exclusion of the scored target
+    month from checkpoint training examples.
 
 ### Still required before production sign-off
 
-- Add **checkpoint-safe MTD/run-rate features to XGBoost** if testing confirms that
-  the history-only XGBoost candidate should compete directly with the MTD baseline.
 - Add forecast reconciliation rules if forecasts are consumed together with a
   higher-level corporate aggregate.
 - Add broader model/feature/output integration tests against representative
   synthetic fixtures before live database execution.
 - Confirm the exact production column contract of `mv_ai_region_monthly` and
   `dimdate.networkeddays` against the live database.
-- Run the full pipeline against representative production-like data and review
-  interval coverage before accepting the P10/P90 calibration operationally.
+- Run the full pipeline against representative production-like data and compare
+  checkpoint-aware XGBoost versus the baseline/ETS/SARIMA candidates before
+  accepting the new model selection behavior.
+- Review strict interval coverage and interval width after the checkpoint-aware
+  XGBoost forecasts are included in the candidate set.
 
 ## Interval backtest methodology
 
@@ -92,6 +103,28 @@ pass:
 This makes historical interval coverage a genuine out-of-time diagnostic rather
 than a retrospective in-sample calibration check.
 
+## Checkpoint-aware XGBoost methodology
+
+For a forecast made at checkpoint `C` in target month `T`, the XGBoost model receives
+only information known by checkpoint `C`:
+
+- closed-history lag and rolling features;
+- target-month MTD Sell-In through checkpoint `C`;
+- elapsed, remaining and total working days;
+- observed daily run-rate and its EOM projection;
+- the authoritative monthly target, which is known before the month starts;
+- MTD target achievement; and
+- the checkpoint identifier.
+
+A separate pooled model is trained for each configured checkpoint. For every scored
+target month `T`, its checkpoint model is trained only from historical target-month
+examples with target month `< T`. This prevents both current-month actual leakage
+and retrospective use of the scored month's outcome.
+
+The production path uses the latest checkpoint model already reached by the current
+month. If the current month has not reached WD4 or a checkpoint model is unavailable,
+the existing history-only XGBoost model remains the safe fallback.
+
 ## Data flow
 
 ```text
@@ -108,8 +141,9 @@ PostgreSQL
                        closed history                 current MTD + WD
                               │                                 │
                     ETS / SARIMA / XGBoost              run-rate baseline
-                              └────────────────┬────────────────┘
-                                               ▼
+                              │                                 │
+                              └──────── checkpoint XGBoost ────┘
+                                               │
                                  backtest-weighted ensemble
                                                │
                                   OOS residual calibration
@@ -155,7 +189,8 @@ forecast_engine/
 │   └── postgres.py
 ├── tests/
 │   ├── test_validation.py
-│   └── test_rolling_intervals.py
+│   ├── test_rolling_intervals.py
+│   └── test_xgb_checkpoint.py
 ├── .github/workflows/ci.yml
 └── main.py
 ```
