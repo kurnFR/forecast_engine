@@ -16,30 +16,52 @@ logger = logging.getLogger(__name__)
 GROUP_COLS = FORECAST_CONFIG["grain"]
 
 
-def _next_month_xgb_features(hist_features: pd.DataFrame, current_month: pd.Timestamp) -> pd.DataFrame:
-    """Construct a feature row for current_month from closed history only."""
+def _next_month_xgb_features(
+    hist_features: pd.DataFrame,
+    calendar: pd.DataFrame,
+    current_month: pd.Timestamp,
+) -> pd.DataFrame:
+    """Construct current-month XGBoost rows using closed history only."""
     rows = []
-    for key, group in hist_features[hist_features["periode"] < current_month].groupby(GROUP_COLS):
+    closed = hist_features[hist_features["periode"] < current_month].copy()
+    calendar = calendar.copy()
+    calendar["date"] = pd.to_datetime(calendar["date"])
+
+    total_working_days = int(
+        calendar.loc[
+            (calendar["date"] >= current_month)
+            & (calendar["date"] < current_month + pd.offsets.MonthBegin(1)),
+            "is_working_day",
+        ].astype(bool).sum()
+    )
+
+    for key, group in closed.groupby(GROUP_COLS):
         key_vals = key if isinstance(key, tuple) else (key,)
         g = group.sort_values("periode").copy()
-        if g.empty:
+        if len(g) < 6:
             continue
-        latest = g.iloc[-1].copy()
-        values = g["monthly_value"].astype(float).tail(3).tolist()
-        previous = g["monthly_value"].astype(float).tail(4).tolist()
 
-        latest["calendar_month"] = current_month.month
+        values = g["monthly_value"].astype(float).tolist()
+        row = {c: value for c, value in zip(GROUP_COLS, key_vals)}
+        row["periode"] = current_month
         for lag in range(1, 7):
-            latest[f"lag_{lag}"] = (
-                previous[-lag] if len(previous) >= lag else np.nan
-            )
-        if len(previous) >= 2 and previous[-2] != 0:
-            latest["mom_growth"] = previous[-1] / previous[-2] - 1.0
-        else:
-            latest["mom_growth"] = np.nan
-        latest["rolling_mean_3"] = np.mean(values) if values else np.nan
-        latest["rolling_std_3"] = np.std(values, ddof=1) if len(values) >= 2 else np.nan
-        rows.append({**{c: latest[c] for c in GROUP_COLS}, **latest.to_dict()})
+            row[f"lag_{lag}"] = values[-lag] if len(values) >= lag else np.nan
+        row["mom_growth"] = (
+            values[-1] / values[-2] - 1.0 if len(values) >= 2 and values[-2] != 0 else np.nan
+        )
+        recent = values[-3:]
+        row["rolling_mean_3"] = np.mean(recent) if recent else np.nan
+        row["rolling_std_3"] = np.std(recent, ddof=1) if len(recent) >= 2 else np.nan
+        same_month = g.loc[g["periode"].dt.month == current_month.month, "monthly_value"].astype(float)
+        overall_mean = np.mean(values) if values else 0.0
+        row["seasonal_index"] = (
+            float(same_month.mean()) / overall_mean
+            if len(same_month) and overall_mean != 0
+            else np.nan
+        )
+        row["calendar_month"] = current_month.month
+        row["total_working_days"] = total_working_days
+        rows.append(row)
 
     return pd.DataFrame(rows)
 
@@ -51,6 +73,7 @@ def run_prediction_pipeline(trained: dict) -> pd.DataFrame:
     hist_features = trained["hist_features"]
     xgb_model = trained["xgb_model"]
     targets = trained["targets"]
+    best_models = trained.get("best_models", pd.DataFrame())
 
     current_month = pd.Timestamp.today().normalize().replace(day=1)
 
@@ -70,7 +93,7 @@ def run_prediction_pipeline(trained: dict) -> pd.DataFrame:
         ts_rows.append(row)
     ts_forecasts = pd.DataFrame(ts_rows)
 
-    xgb_features = _next_month_xgb_features(hist_features, current_month)
+    xgb_features = _next_month_xgb_features(hist_features, calendar, current_month)
     xgb_rows = []
     for _, row in xgb_features.iterrows():
         pred = predict_xgboost(xgb_model, pd.DataFrame([row]))
@@ -81,6 +104,8 @@ def run_prediction_pipeline(trained: dict) -> pd.DataFrame:
         cur.merge(ts_forecasts, on=GROUP_COLS, how="left")
         .merge(xgb_df, on=GROUP_COLS, how="left")
     )
+    if not best_models.empty:
+        result = result.merge(best_models, on=GROUP_COLS, how="left")
     result = build_ensemble(result)
 
     current_targets = targets[targets["periode"] == current_month]
