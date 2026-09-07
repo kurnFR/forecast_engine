@@ -1,58 +1,120 @@
-# Sell-in End-of-Month Forecast Engine
+# Sell-In End-of-Month Forecast Engine — V2
 
-Forecasts end-of-month sell-in achievement (Rp value vs `target_sellin`) for
-every **region + branch**, and writes the result to
-`dwh_prod.forecast_sellin_eom` in Postgres.
+Production-oriented forecast engine for **monthly Sell-In value at region grain**.
+The current design is locked to `regioncode × periode` and is intended to
+forecast the current month's end-of-month Sell-In and achievement versus the
+authoritative regional target.
 
-## What it does
+## V2 contract
 
-1. **Extract** daily sell-in from `dwh_prod.sellinascend`, joined to a
-   branch/region dimension, plus region-level monthly targets and a
-   working-day calendar from `dwh_prod.dimdate`.
-2. **Aggregate** to monthly per (region, branch); allocate region targets
-   down to branches pro-rata (no branch-level target exists in the schema
-   you shared — see `config.py` if you actually have one).
-3. **Feature engineer**: month-to-date run-rate, working-days elapsed/
-   remaining, lags, month-over-month growth, seasonality index.
-4. **Model** each series four ways:
-   - `baseline`: MTD value ÷ elapsed working days × total working days
-   - `ets`: Holt exponential smoothing
-   - `sarima`: seasonal ARIMA
-   - `xgboost`: gradient boosting trained across all series' engineered features
-5. **Backtest** ETS/SARIMA/naive on every historical month (rolling-origin)
-   so you can see which model actually predicts well for which series.
-6. **Ensemble** the four forecasts (weighted average, configurable in
-   `config.py`), compute forecast achievement % vs target, and
-   **upsert into Postgres**.
+- **Forecast grain:** `regioncode × month`
+- **History:** up to **36 months**; a region needs at least **24 closed months**
+  to be eligible for the full model comparison
+- **Calendar:** working-day progress comes from `networkeddays`
+- **Target:** read directly from `dwh_prod.mv_ai_region_monthly`
+- **Backtest checkpoints:** **WD4, WD7, WD10, WD15, WD20**
+- **Leakage rule:** a checkpoint may use only data available on or before that
+  working day; the target month itself must never be used to train its forecast
+- **Candidate models:** Historical/Run-rate Baseline, ETS, SARIMA, XGBoost
+- **Selection:** driven by leakage-safe backtest performance; primary metric is WAPE
+- **Uncertainty:** P10 / P50 / P90 are persisted with every forecast
+- **Output:** upserted by `(regioncode, periode)`
+- **QA:** source/mapping/calendar validation is required before production runs
 
-## ⚠️ Before you run this — check your schema assumptions
+## Current implementation status
 
-Your shared DDL fully defines `sellinascend` and `dimdate`, but the two
-materialized views reference `v_sr_per_branch` and
-`v_t_sellin_ascend_sellout_eska`, whose full column lists weren't included.
-Everything the pipeline assumes about those two objects — plus the
-`sellinascend.city ↔ vt_sr_per_rsmasw.kota` join used to attach a branch to
-each invoice line — is documented and centralized at the top of
-**`config.py`** in the `SOURCE` dict. If a query returns 0 rows or errors
-out, that's the first place to look. In particular:
+### Implemented in V2
 
-- If your real customer→branch mapping is different (e.g. by
-  `"Customer Region"` or `"Customer Code"` instead of `city`), update
-  `branch_join_col_fact` / `branch_join_col_dim`.
-- If you *do* have a branch-level target table, swap out
-  `data/aggregation.py::allocate_branch_targets` for a direct join instead
-  of the pro-rata allocation.
-- `"workingday(5)"` vs `"workingday(6)"` in `dimdate` — pick whichever one
-  your team actually uses to mean "is a working day" (`SOURCE["working_day_col"]`).
+1. Region-month configuration and 36-month history window.
+2. Direct region target extraction from `mv_ai_region_monthly`.
+3. Complete monthly panel so missing sales months become explicit zero values.
+4. Leakage-safe working-day checkpoint backtest for baseline, ETS and SARIMA.
+5. WAPE and percentage-bias metrics for model comparison.
+6. Region-month prediction path with current-MTD baseline and closed-history ETS/SARIMA.
+7. P10/P50/P90 output fields.
+8. PostgreSQL output primary key changed to `(regioncode, periode)`.
+
+### Still required before production sign-off
+
+- Add XGBoost to the same WD checkpoint backtest and allow it into automated
+  model/ensemble weighting only after validation.
+- Add formal source mapping QA (unmapped, duplicate and conflicting region
+  mappings) and calendar completeness QA.
+- Add forecast reconciliation rules if forecasts are consumed together with a
+  higher-level corporate aggregate.
+- Add residual-based interval calibration so P10/P90 are derived from historical
+  out-of-sample residuals rather than the provisional cross-model dispersion.
+- Add automated unit/integration tests and CI execution against a representative
+  fixture database.
+- Confirm the exact production column contract of `mv_ai_region_monthly` and
+  `dimdate.networkeddays` before the first live database run.
+
+## Data flow
+
+```text
+PostgreSQL
+   │
+   ├── sellinascend ── daily region Sell-In ──┐
+   ├── dimdate (networkeddays) ────────────────┤
+   └── mv_ai_region_monthly (target) ──────────┤
+                                               ▼
+                                    validation + monthly panel
+                                               │
+                              ┌────────────────┴────────────────┐
+                              ▼                                 ▼
+                       closed history                 current MTD + WD
+                              │                                 │
+                    ETS / SARIMA / XGBoost              run-rate baseline
+                              └────────────────┬────────────────┘
+                                               ▼
+                                      ensemble + P10/P50/P90
+                                               │
+                                               ▼
+                                  forecast_sellin_eom
+```
+
+## Repository layout
+
+```text
+forecast_engine/
+├── config.py
+├── db.py
+├── data/
+│   ├── extract.py
+│   ├── validation.py
+│   └── aggregation.py
+├── features/
+│   ├── current_month.py
+│   ├── historical.py
+│   └── working_day.py
+├── models/
+│   ├── baseline.py
+│   ├── ensemble.py
+│   ├── ets.py
+│   ├── sarima.py
+│   └── xgboost_model.py
+├── backtest/
+│   ├── rolling.py
+│   ├── metrics.py
+│   └── model_selection.py
+├── forecast/
+│   ├── train.py
+│   └── predict.py
+├── output/
+│   └── postgres.py
+└── main.py
+```
 
 ## Setup
 
 ```bash
-cd forecast_engine
-python -m venv venv && source venv/bin/activate   # or your preferred env manager
+python -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # then fill in your real Postgres credentials
+cp .env.example .env
 ```
+
+Configure `PG_HOST`, `PG_PORT`, `PG_DB`, `PG_USER` and `PG_PASSWORD` in `.env`.
 
 ## Run
 
@@ -60,68 +122,36 @@ cp .env.example .env   # then fill in your real Postgres credentials
 python main.py
 ```
 
-This trains on history, backtests, generates the current month's
-end-of-month forecast for every (region, branch), and upserts it into
+The engine trains from closed history, evaluates historical checkpoints,
+generates the current region-month forecast, and upserts the result to
 `dwh_prod.forecast_sellin_eom`.
 
-Recommended: schedule this daily (cron / Airflow) so the forecast
-tightens as the month progresses and more actuals come in.
-
-## Output table
+## Output schema
 
 ```sql
-dwh_prod.forecast_sellin_eom (
-    regioncode, branchcode, periode,
-    mtd_value, elapsed_working_days, remaining_working_days, total_working_days,
-    forecast_baseline, forecast_ets, forecast_sarima, forecast_xgboost, forecast_ensemble,
-    branch_target_sellin, achievement_pct_forecast, generated_at,
-    PRIMARY KEY (regioncode, branchcode, periode)
-)
+CREATE TABLE dwh_prod.forecast_sellin_eom (
+    regioncode text NOT NULL,
+    periode date NOT NULL,
+    mtd_value numeric(23,4),
+    elapsed_working_days int,
+    remaining_working_days int,
+    total_working_days int,
+    forecast_baseline numeric(23,4),
+    forecast_ets numeric(23,4),
+    forecast_sarima numeric(23,4),
+    forecast_xgboost numeric(23,4),
+    forecast_p10 numeric(23,4),
+    forecast_p50 numeric(23,4),
+    forecast_p90 numeric(23,4),
+    target_sellin numeric(23,4),
+    achievement_pct_forecast numeric(9,4),
+    generated_at timestamp NOT NULL DEFAULT now(),
+    PRIMARY KEY (regioncode, periode)
+);
 ```
 
-Re-running for the same month updates the row (upsert on
-`regioncode, branchcode, periode`) so you always have the latest forecast
-per month, plus history once the month rolls over.
+## Safe update policy
 
-## Project layout
-
-```
-forecast_engine/
-├── config.py            # DB creds (.env) + all schema/join assumptions
-├── db.py                # SQLAlchemy engine + query helpers
-├── data/
-│   ├── extract.py       # raw SQL pulls
-│   ├── validation.py    # null/dupe/sanity checks
-│   └── aggregation.py   # daily -> monthly, target allocation
-├── features/
-│   ├── current_month.py # MTD / run-rate
-│   ├── historical.py    # lags, growth, seasonality
-│   └── working_day.py   # working-day counting
-├── models/
-│   ├── baseline.py
-│   ├── ets.py
-│   ├── sarima.py
-│   ├── xgboost_model.py
-│   └── ensemble.py
-├── backtest/
-│   ├── rolling.py        # rolling-origin backtest
-│   ├── metrics.py         # MAPE/MAE/RMSE/bias
-│   └── model_selection.py # best model per series
-├── forecast/
-│   ├── train.py
-│   └── predict.py
-├── output/
-│   └── postgres.py       # upsert into forecast_sellin_eom
-└── main.py
-```
-
-## Tuning
-
-- `config.FORECAST_CONFIG["grain"]` — change to `["regioncode"]` only, or
-  add a third level, if you decide branch grain is too noisy for XGBoost/SARIMA.
-- `config.MODEL_CONFIG["ensemble_weights_default"]` — reweight based on what
-  `backtest_results` shows performs best in your data (e.g. if SARIMA
-  consistently wins, raise its weight).
-- Series with under `min_history_months` of history will only get a
-  baseline + XGBoost forecast (ETS/SARIMA return `None` and are excluded
-  from that series' ensemble automatically).
+Changes to `master` are applied sequentially using the current file/blob SHA.
+No force-push or blind overwrite is used. Each write creates a normal Git
+commit whose parent is the latest verified branch state.
