@@ -74,6 +74,7 @@ def run_prediction_pipeline(trained: dict) -> pd.DataFrame:
     xgb_model = trained["xgb_model"]
     targets = trained["targets"]
     best_models = trained.get("best_models", pd.DataFrame())
+    backtest_results = trained.get("backtest_results", pd.DataFrame())
 
     current_month = pd.Timestamp.today().normalize().replace(day=1)
 
@@ -106,6 +107,19 @@ def run_prediction_pipeline(trained: dict) -> pd.DataFrame:
     )
     if not best_models.empty:
         result = result.merge(best_models, on=GROUP_COLS, how="left")
+    if not backtest_results.empty:
+        calibration_cols = GROUP_COLS + [
+            f"{model}_{suffix}"
+            for model in ("baseline", "ets", "sarima", "xgboost")
+            for suffix in ("residual_q10", "residual_q90")
+            if f"{model}_{suffix}" in backtest_results.columns
+        ]
+        if len(calibration_cols) > len(GROUP_COLS):
+            result = result.merge(
+                backtest_results[calibration_cols].drop_duplicates(GROUP_COLS),
+                on=GROUP_COLS,
+                how="left",
+            )
     result = build_ensemble(result)
 
     current_targets = targets[targets["periode"] == current_month]
