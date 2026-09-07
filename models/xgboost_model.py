@@ -1,9 +1,4 @@
-"""Leakage-safe XGBoost model for region-month Sell-In forecasting.
-
-The model is trained on historical rows whose features describe only information
-available before the forecast month. Working-day checkpoint backtesting can
-construct checkpoint-specific feature rows from the same feature builder.
-"""
+"""Leakage-safe XGBoost models for region-month Sell-In forecasting."""
 import logging
 from typing import Optional
 
@@ -21,9 +16,20 @@ FEATURE_COLS = [
     "calendar_month", "total_working_days",
 ]
 
+CHECKPOINT_FEATURE_COLS = FEATURE_COLS + [
+    "mtd_value",
+    "elapsed_working_days",
+    "remaining_working_days",
+    "avg_daily_rate",
+    "run_rate_forecast",
+    "target_sellin",
+    "mtd_target_pct",
+    "checkpoint",
+]
 
-def _training_frame(train_df: pd.DataFrame, target_col: str) -> tuple[pd.DataFrame, list[str]]:
-    cols = [c for c in FEATURE_COLS if c in train_df.columns]
+
+def _training_frame(train_df: pd.DataFrame, target_col: str, feature_cols: list[str]) -> tuple[pd.DataFrame, list[str]]:
+    cols = [c for c in feature_cols if c in train_df.columns]
     if not cols:
         raise ValueError("No XGBoost feature columns are present.")
     d = train_df.dropna(subset=cols + [target_col]).copy()
@@ -33,12 +39,40 @@ def _training_frame(train_df: pd.DataFrame, target_col: str) -> tuple[pd.DataFra
 
 
 def train_xgboost(train_df: pd.DataFrame, target_col: str = "monthly_value") -> XGBRegressor:
-    """Fit one pooled region-month model using only supplied historical rows."""
-    d, cols = _training_frame(train_df, target_col)
+    """Fit one pooled history-only region-month model."""
+    d, cols = _training_frame(train_df, target_col, FEATURE_COLS)
     model = XGBRegressor(**MODEL_CONFIG["xgboost"])
     model.fit(d[cols], d[target_col])
     model._feature_cols_used = cols
     return model
+
+
+def train_xgboost_checkpoint(train_df: pd.DataFrame, target_col: str = "monthly_value") -> XGBRegressor:
+    """Fit a checkpoint model whose features may include target-month MTD data."""
+    d, cols = _training_frame(train_df, target_col, CHECKPOINT_FEATURE_COLS)
+    model = XGBRegressor(**MODEL_CONFIG["xgboost"])
+    model.fit(d[cols], d[target_col])
+    model._feature_cols_used = cols
+    model._checkpoint_aware = True
+    return model
+
+
+def train_xgboost_checkpoint_models(
+    training_frame: pd.DataFrame,
+    checkpoints: list[int],
+    target_col: str = "monthly_value",
+) -> dict[int, XGBRegressor]:
+    """Train one pooled XGBoost model per working-day checkpoint."""
+    models: dict[int, XGBRegressor] = {}
+    for checkpoint in checkpoints:
+        frame = training_frame[training_frame["checkpoint"] == checkpoint].copy()
+        if frame.empty:
+            continue
+        try:
+            models[int(checkpoint)] = train_xgboost_checkpoint(frame, target_col)
+        except (ValueError, TypeError) as exc:
+            logger.warning("Checkpoint XGBoost unavailable for WD%s: %s", checkpoint, exc)
+    return models
 
 
 def predict_xgboost(model: XGBRegressor, features_row: pd.DataFrame) -> Optional[float]:
