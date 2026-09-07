@@ -254,3 +254,118 @@ CREATE TABLE dwh_prod.forecast_sellin_eom (
 Changes to `master` are applied sequentially using the current file/blob SHA.
 No force-push or blind overwrite is used. Each write creates a normal Git
 commit whose parent is the latest verified branch state.
+
+## Code review notes (Claude, 2026-09-07)
+
+Reviewed at commit `5907a30`. This is a genuine, substantial upgrade over the
+V1 design — the review below is meant to get it to a state that actually
+runs, not to relitigate the architecture. Nothing in the codebase was changed
+as part of this review; only this section was added.
+
+### 🔴 Blocking — the app cannot currently start or be tested
+
+**1. `ImportError` in `backtest/rolling_intervals.py`.**
+It imports `_xgb_checkpoint_features` from `backtest/xgb_checkpoint.py`, but
+that function does not exist in that module (only `_as_key`,
+`_checkpoint_date`, `_residual_stats`, `_history_features`, `_checkpoint_row`,
+`_build_training_frame`, and `rolling_xgb_checkpoint_backtest` are defined
+there). Confirmed by running `python -c "import backtest.rolling_intervals"`:
+
+```
+ImportError: cannot import name '_xgb_checkpoint_features' from 'backtest.xgb_checkpoint'
+```
+
+Because `forecast/train.py` imports `rolling_interval_backtest` from this
+module at the top level, **`main.py` cannot run at all** right now — it fails
+before any database connection is even attempted. It also means `pytest`
+cannot collect the suite: `tests/test_rolling_intervals.py` fails to import,
+which aborts collection for the *entire* run (confirmed: `pytest tests/`
+reports "Interrupted: 1 error during collection", 0 of 15 tests executed).
+**The GitHub Actions CI badge on this repo is red right now for this reason**
+— every push and PR to `master` will fail the `test` job at the "Run tests"
+step before a single test runs.
+
+Fix options: either implement `_xgb_checkpoint_features` in
+`xgb_checkpoint.py` (it looks like it was meant to build the current-month
+feature row for a given checkpoint, similar to `_history_features` +
+`_checkpoint_row` combined, for use by `rolling_intervals.py`), or have
+`rolling_intervals.py` reuse `_history_features`/`_checkpoint_row` directly
+if that covers the same need.
+
+**2. Target-column mismatch crashes checkpoint XGBoost training once #1 is fixed.**
+`train_xgboost_checkpoint()` in `models/xgboost_model.py` defaults to
+`target_col="monthly_value"`. But the checkpoint training frames built by
+`backtest/xgb_checkpoint.py` (`_checkpoint_row` → `_build_training_frame`)
+name the realized value column `"actual"`, not `"monthly_value"` — confirmed
+by inspecting `_checkpoint_row`'s return dict and by reproducing the crash
+with synthetic data:
+
+```
+KeyError: ['monthly_value']
+  at models/xgboost_model.py:_training_frame
+     -> train_df.dropna(subset=cols + [target_col])
+```
+
+This hits two call sites with no override:
+- `backtest/xgb_checkpoint.py::rolling_xgb_checkpoint_backtest` →
+  `train_xgboost_checkpoint(train_frame)` (backtest path)
+- `models/xgboost_model.py::train_xgboost_checkpoint_models` → same default,
+  called from `forecast/train.py::run_training_pipeline` (production path)
+
+So even after fixing the `ImportError`, training will still crash with
+`KeyError: ['monthly_value']` on any dataset with enough history to reach
+that step (reproduced locally with 30 months of synthetic history). Either
+pass `target_col="actual"` explicitly at both call sites, or rename the key
+in `_checkpoint_row`/`_history_features` to `monthly_value` for consistency
+with the rest of the codebase (`to_monthly()` etc. all use `monthly_value`).
+
+### 🟡 Worth checking
+
+**3. `tests/test_xgb_checkpoint.py::test_checkpoint_training_frame_excludes_scored_target_month` fails against the current code**, independent of bugs #1/#2 — confirmed by running it in isolation. The fixture's `daily`/`calendar` frames only cover the target month (March 2026), but `_build_training_frame` needs daily + calendar coverage for *every* prior historical month back to the start of `monthly` (Jan 2024 in that fixture) to compute each historical checkpoint's MTD value. With only one month of calendar/daily data, every historical row's `_checkpoint_date()` lookup returns `None` and the training frame comes back empty, so `assert not frame.empty` fails. This is very likely just an under-specified fixture rather than a design problem — but it's a useful reminder that in production, `history_months=36` daily+calendar extraction (already done via `get_daily_sellin`/`get_calendar`) needs to actually deliver full-range data for this feature set to populate at all, not just the current month.
+
+**4. `tests/test_historical_features.py::test_momentum_is_previous_month_growth` fails on float equality**: `assert march["mom_growth"] == 0.2` gets `0.19999999999999996`. Not a logic bug — `120/100 - 1` vs `150/120 - 1` chained through pandas `pct_change()` just isn't exactly representable — but worth switching to `pytest.approx(0.2)` so it isn't a recurring red herring in CI once #1/#2 are fixed.
+
+**5. Silent fallback risk in ensemble weighting.** `models/ensemble.py::_row_backtest_weights` looks for `f"{model}_checkpoint_score"` columns (correctly produced by `backtest/model_selection.py::select_best_model` and merged into the prediction frame in `forecast/predict.py`). Right now, because `backtest_results` never successfully gets built (bugs #1/#2), this always silently falls through to `MODEL_CONFIG["ensemble_weights_default"]` with no warning logged. Once training actually completes end-to-end, it'd be worth adding a log line when the fallback path is taken, so a future silent misconfiguration (e.g. a renamed column) doesn't quietly degrade to static weights without anyone noticing.
+
+**6. Runtime cost of the checkpoint backtest.** `rolling_xgb_checkpoint_backtest` and `build_oos_checkpoint_predictions` both retrain a fresh XGBoost model per (target month × checkpoint) combination for leakage-safety — with 36 months of history and 5 checkpoints that's up to ~180 model fits per run. Correct for the leakage guarantee, but worth timing against real production data volume; if `python main.py` needs to run daily, this is the part most likely to make that slow.
+
+**7. Minor duplication.** `CANDIDATE_MODELS = ("baseline", "ets", "sarima", "xgboost")` is defined independently in both `models/ensemble.py` (tuple) and `backtest/model_selection.py` (list). Same four values in both places today; low risk, but consider importing from one location so they can't silently drift apart later.
+
+### 🟢 Genuine improvements over the original V1 scaffold
+
+- Dropping the branch grain and the `sellinascend.city ↔ v_sr_per_branch.kota`
+  join guess entirely, and reading targets straight from
+  `mv_ai_region_monthly`, removes the single riskiest unverified assumption
+  in the V1 design. This is the right call.
+- Using `dimdate.networkeddays` instead of guessing between
+  `"workingday(5)"` and `"workingday(6)"` is a real fix, not a style choice.
+- `WAPE` as the primary backtest metric instead of `MAPE` is more robust for
+  months with a near-zero region total, where `MAPE` blows up.
+- `complete_month_panel()` explicitly zero-filling missing months, and
+  `validate_region_alignment()` rejecting silent region-code drift between
+  actuals and targets, are exactly the kind of data-quality guardrails a V1
+  scaffold like this needs before touching production data.
+- The leakage discipline in the checkpoint design (both for point forecasts
+  in `xgb_checkpoint.py` and for the P10/P50/P90 interval backtest in
+  `rolling_intervals.py`) is conceptually sound and well-documented in the
+  "Checkpoint-aware XGBoost methodology" section above — training strictly on
+  `periode < target_month` and calibrating intervals strictly on
+  `periode < T` for the same checkpoint is the correct walk-forward pattern.
+  It just isn't reachable yet due to bugs #1/#2.
+- Non-negative forecast guards (`max(pred, 0.0)`) throughout are a good
+  defensive habit given this is a monetary forecast.
+- Having `.github/workflows/ci.yml` at all, even though it's currently
+  failing, is the right infrastructure to have in place before this goes
+  near a real schedule.
+
+### Suggested order of fixes
+
+1. Implement `_xgb_checkpoint_features` (or remove the dependency) so the
+   package imports again.
+2. Fix the `target_col` mismatch in the two `train_xgboost_checkpoint(...)`
+   call sites.
+3. Re-run `pytest -q` and confirm all 15 tests pass (expect 2 more failures
+   to fix per items #3–4 above).
+4. Only then run `python main.py` against a real (or realistic synthetic)
+   Postgres instance to sanity-check runtime and output rows before
+   scheduling it anywhere.
