@@ -38,6 +38,8 @@ def _safe_forecast(fn, series):
 
 def _prior_weights(rows: pd.DataFrame) -> dict:
     """Calculate inverse-WAPE weights from calibration rows strictly before T."""
+    if rows is None or rows.empty:
+        return {"baseline": 1.0}
     scores = {}
     for model in CANDIDATE_MODELS:
         pred_col = f"forecast_{model}"
@@ -59,6 +61,17 @@ def _prior_weights(rows: pd.DataFrame) -> dict:
 def _ensemble_with_prior_calibration(target_row: pd.Series, prior_rows: pd.DataFrame, checkpoint: int):
     """Build P10/P50/P90 using calibration rows strictly before the target."""
     del checkpoint
+    if prior_rows is None or prior_rows.empty:
+        available = {
+            model: float(target_row[f"forecast_{model}"])
+            for model in CANDIDATE_MODELS
+            if pd.notna(target_row.get(f"forecast_{model}"))
+        }
+        if not available:
+            return np.nan, np.nan, np.nan
+        p50 = float(np.mean(list(available.values())))
+        return np.nan, p50, np.nan
+
     weights = _prior_weights(prior_rows)
     available = {
         model: float(target_row[f"forecast_{model}"])
