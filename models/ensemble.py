@@ -49,7 +49,6 @@ def _residual_interval(row: pd.Series, weights: dict, p50: float) -> tuple[float
             used.append(float(weight))
 
     if not used:
-        # Explicit safety fallback for a region with insufficient residual history.
         spread = max(abs(p50) * 0.15, 1.0)
         return max(p50 - 1.28 * spread, 0.0), max(p50 + 1.28 * spread, 0.0)
 
@@ -78,3 +77,37 @@ def build_ensemble(df: pd.DataFrame, weights: Optional[dict] = None) -> pd.DataF
     )
     intervals.columns = ["forecast_p10", "forecast_p50", "forecast_p90"]
     return pd.concat([out, intervals], axis=1)
+
+
+def interval_coverage_metrics(actual, p10, p50, p90) -> dict:
+    """Calculate empirical interval diagnostics for out-of-sample forecasts.
+
+    P10/P90 are interpreted as quantile bounds: roughly 10% of observations
+    should fall below P10 and 10% above P90, while the central P10-P90 interval
+    should cover roughly 80% of observations. Metrics are intentionally
+    descriptive; production acceptance thresholds belong in backtest policy.
+    """
+    a = np.asarray(actual, dtype=float)
+    lo = np.asarray(p10, dtype=float)
+    mid = np.asarray(p50, dtype=float)
+    hi = np.asarray(p90, dtype=float)
+    valid = np.isfinite(a) & np.isfinite(lo) & np.isfinite(mid) & np.isfinite(hi)
+    if not valid.any():
+        return {
+            "observations": 0,
+            "p10_below_rate": np.nan,
+            "p90_above_rate": np.nan,
+            "coverage": np.nan,
+            "mean_interval_width": np.nan,
+            "mae_p50": np.nan,
+        }
+
+    a, lo, mid, hi = a[valid], lo[valid], mid[valid], hi[valid]
+    return {
+        "observations": int(len(a)),
+        "p10_below_rate": float(np.mean(a < lo)),
+        "p90_above_rate": float(np.mean(a > hi)),
+        "coverage": float(np.mean((a >= lo) & (a <= hi))),
+        "mean_interval_width": float(np.mean(hi - lo)),
+        "mae_p50": float(np.mean(np.abs(a - mid))),
+    }
