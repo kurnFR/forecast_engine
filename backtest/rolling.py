@@ -35,6 +35,17 @@ def _safe_forecast(fn, series):
         return None
 
 
+def _residual_stats(pairs):
+    """Return robust out-of-sample residual quantiles for interval calibration."""
+    if not pairs:
+        return np.nan, np.nan, 0
+    residuals = np.asarray([actual - pred for actual, pred in pairs], dtype=float)
+    residuals = residuals[np.isfinite(residuals)]
+    if not len(residuals):
+        return np.nan, np.nan, 0
+    return float(np.quantile(residuals, 0.10)), float(np.quantile(residuals, 0.90)), len(residuals)
+
+
 def rolling_backtest(
     monthly_history: pd.DataFrame,
     group_cols: list,
@@ -43,12 +54,14 @@ def rolling_backtest(
     calendar: pd.DataFrame | None = None,
     checkpoints: list[int] | None = None,
 ) -> pd.DataFrame:
-    """Evaluate baseline/ETS/SARIMA and XGBoost at WD checkpoints.
+    """Evaluate candidate models at working-day checkpoints.
 
-    ETS/SARIMA use only closed months before each target month.  The baseline
-    uses target-month Sell-In only through the requested working-day checkpoint.
-    XGBoost is evaluated separately with a freshly fitted, pre-target model and
-    checkpoint-safe feature rows, then its metrics are merged into this result.
+    ETS/SARIMA use only closed months before each target month. The baseline
+    uses target-month Sell-In only through the requested checkpoint. XGBoost
+    is evaluated separately with a freshly fitted pre-target model.
+
+    Residual quantiles are retained from these out-of-sample predictions so
+    production P10/P90 intervals can be calibrated without using future data.
     """
     checkpoints = checkpoints or [4, 7, 10, 15, 20]
     if daily_history is None or calendar is None:
@@ -58,6 +71,8 @@ def rolling_backtest(
     if not required.issubset(monthly_history.columns):
         raise ValueError(f"monthly_history missing columns: {required - set(monthly_history.columns)}")
 
+    monthly = monthly_history.copy()
+    monthly["periode"] = pd.to_datetime(monthly["periode"])
     daily = daily_history.copy()
     daily["invoice_date"] = pd.to_datetime(daily["invoice_date"])
     daily["periode"] = daily["invoice_date"].dt.to_period("M").dt.to_timestamp()
@@ -65,7 +80,7 @@ def rolling_backtest(
     calendar["date"] = pd.to_datetime(calendar["date"])
 
     rows = []
-    for key, group in monthly_history.groupby(group_cols):
+    for key, group in monthly.groupby(group_cols):
         key_vals = key if isinstance(key, tuple) else (key,)
         key_dict = dict(zip(group_cols, key_vals))
         g = group.sort_values("periode").reset_index(drop=True)
@@ -123,6 +138,8 @@ def rolling_backtest(
                 for metric in ("wape", "mae", "rmse", "bias", "bias_pct"):
                     row[f"{model}_{metric}"] = np.nan
                 row[f"{model}_observations"] = 0
+                row[f"{model}_residual_q10"] = np.nan
+                row[f"{model}_residual_q90"] = np.nan
                 continue
             y_true, y_pred = zip(*pairs)
             row.update({
@@ -133,6 +150,9 @@ def rolling_backtest(
                 f"{model}_bias_pct": bias_pct(y_true, y_pred),
                 f"{model}_observations": len(pairs),
             })
+            q10, q90, _ = _residual_stats(pairs)
+            row[f"{model}_residual_q10"] = q10
+            row[f"{model}_residual_q90"] = q90
             for checkpoint in checkpoints:
                 cp_pairs = checkpoint_values[model][checkpoint]
                 row[f"{model}_wd{checkpoint}_wape"] = (
@@ -143,7 +163,7 @@ def rolling_backtest(
 
     base_results = pd.DataFrame(rows)
     xgb_results = rolling_xgb_checkpoint_backtest(
-        monthly_history=monthly_history,
+        monthly_history=monthly,
         daily_history=daily,
         calendar=calendar,
         group_cols=group_cols,
@@ -152,4 +172,6 @@ def rolling_backtest(
     )
     if base_results.empty:
         return xgb_results
-    return base_results.merge(xgb_results, on=group_cols, how="left")
+
+    result = base_results.merge(xgb_results, on=group_cols, how="left")
+    return result
