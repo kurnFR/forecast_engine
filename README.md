@@ -19,8 +19,8 @@ authoritative regional target.
 - **Selection:** driven by leakage-safe checkpoint WAPE
 - **Ensemble:** inverse-WAPE backtest weighting is used for P50 when valid
   checkpoint scores are available
-- **Uncertainty:** P10 / P50 / P90 are persisted with every forecast; interval
-  calibration is still provisional
+- **Uncertainty:** P10 / P50 / P90 use out-of-sample residual quantiles, with a
+  safe fallback when residual history is unavailable
 - **Output:** upserted by `(regioncode, periode)`
 - **QA:** source/mapping/calendar validation is required before production runs
 
@@ -40,9 +40,10 @@ authoritative regional target.
 8. Region-month prediction path with current-MTD baseline and closed-history
    ETS/SARIMA/XGBoost candidates.
 9. Backtest-derived inverse-WAPE ensemble weighting for P50.
-10. P10/P50/P90 output fields.
-11. PostgreSQL output primary key changed to `(regioncode, periode)`.
-12. Daily and target-source validation updated to the locked region-month contract,
+10. Out-of-sample residual q10/q90 collection for every candidate model.
+11. Residual-calibrated P10/P50/P90 with non-negative forecast safeguards.
+12. PostgreSQL output primary key changed to `(regioncode, periode)`.
+13. Daily and target-source validation updated to the locked region-month contract,
     including duplicate target-key detection.
 
 ### Still required before production sign-off
@@ -53,8 +54,8 @@ authoritative regional target.
   and calendar completeness/consistency QA.
 - Add forecast reconciliation rules if forecasts are consumed together with a
   higher-level corporate aggregate.
-- Replace provisional cross-model-dispersion P10/P90 with residual-based interval
-  calibration from out-of-sample checkpoint errors, with explicit coverage testing.
+- Add explicit interval **coverage/backtest diagnostics** (for example empirical
+  P10/P90 hit rates and interval width) before trusting uncertainty operationally.
 - Add automated unit/integration tests and CI execution against representative
   synthetic fixtures before live database execution.
 - Confirm the exact production column contract of `mv_ai_region_monthly` and
@@ -79,6 +80,8 @@ PostgreSQL
                               └────────────────┬────────────────┘
                                                ▼
                                  backtest-weighted ensemble
+                                               │
+                                  OOS residual calibration
                                                │
                                                ▼
                                       P10/P50/P90 forecast
