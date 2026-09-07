@@ -90,9 +90,7 @@ def rolling_xgb_checkpoint_backtest(
 
     Each target-month model is fitted once on all eligible regions using only
     observations strictly before that month. The target-month feature rows use
-    closed history plus the target month's calendar only. Daily Sell-In is
-    accepted for API compatibility and checkpoint-date validation, but is not
-    used as an XGBoost feature in this history-only candidate.
+    closed history plus the target month's calendar only.
     """
     monthly = monthly_history.copy()
     monthly["periode"] = pd.to_datetime(monthly["periode"])
@@ -158,11 +156,8 @@ def rolling_xgb_checkpoint_backtest(
         for cp in checkpoints:
             pairs = cp_pairs[cp]
             if not pairs:
-                out[f"xgboost_wd{cp}_wape"] = np.nan
-                out[f"xgboost_wd{cp}_mae"] = np.nan
-                out[f"xgboost_wd{cp}_rmse"] = np.nan
-                out[f"xgboost_wd{cp}_bias"] = np.nan
-                out[f"xgboost_wd{cp}_bias_pct"] = np.nan
+                for metric in ("wape", "mae", "rmse", "bias", "bias_pct"):
+                    out[f"xgboost_wd{cp}_{metric}"] = np.nan
                 out[f"xgboost_wd{cp}_observations"] = 0
                 continue
             y, p = zip(*pairs)
@@ -182,10 +177,16 @@ def rolling_xgb_checkpoint_backtest(
             out["xgboost_bias"] = bias(y, p)
             out["xgboost_bias_pct"] = bias_pct(y, p)
             out["xgboost_observations"] = len(all_pairs)
+            residuals = np.asarray([actual - pred for actual, pred in all_pairs], dtype=float)
+            residuals = residuals[np.isfinite(residuals)]
+            out["xgboost_residual_q10"] = float(np.quantile(residuals, 0.10)) if len(residuals) else np.nan
+            out["xgboost_residual_q90"] = float(np.quantile(residuals, 0.90)) if len(residuals) else np.nan
         else:
             for metric in ("wape", "mae", "rmse", "bias", "bias_pct"):
                 out[f"xgboost_{metric}"] = np.nan
             out["xgboost_observations"] = 0
+            out["xgboost_residual_q10"] = np.nan
+            out["xgboost_residual_q90"] = np.nan
         results.append(out)
 
     return pd.DataFrame(results)
