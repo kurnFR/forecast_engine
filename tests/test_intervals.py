@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from backtest.intervals import evaluate_intervals, interval_quality_flags
 from models.ensemble import interval_coverage_metrics
@@ -12,9 +13,9 @@ def test_interval_metrics_expected_values():
     p90 = [90, 110, 130, 110, 110]
     metrics = interval_coverage_metrics(actual, p10, p50, p90)
     assert metrics["observations"] == 5
-    assert metrics["coverage"] == 1.0
-    assert metrics["mae_p50"] == 0.0
-    assert metrics["mean_interval_width"] == 20.0
+    assert metrics["coverage"] == pytest.approx(1.0)
+    assert metrics["mae_p50"] == pytest.approx(0.0)
+    assert metrics["mean_interval_width"] == pytest.approx(20.0)
 
 
 def test_interval_evaluation_can_split_by_checkpoint():
