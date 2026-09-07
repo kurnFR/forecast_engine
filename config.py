@@ -1,8 +1,8 @@
 """Central configuration for the V2 Sell-In forecast engine.
 
-V2 is intentionally region-month based.  The forecast grain is
+V2 is intentionally region-month based. The forecast grain is
 (regioncode, periode), history is up to 36 months, and monthly targets are
-read directly from mv_ai_region_monthly.  All forecast/backtest code should
+read directly from mv_ai_region_monthly. All forecast/backtest code should
 consume these settings rather than embedding source-table assumptions.
 """
 import os
@@ -24,15 +24,10 @@ SQLALCHEMY_URL = (
     f"@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}"
 )
 
-# ---------------------------------------------------------------------------
-# Source contract
-# ---------------------------------------------------------------------------
 SOURCE = {
     "fact_table": os.getenv("FORECAST_FACT_TABLE", "dwh_prod.sellinascend"),
     "date_dim": os.getenv("FORECAST_DATE_DIM", "dwh_prod.dimdate"),
-    "region_target_view": os.getenv(
-        "FORECAST_TARGET_TABLE", "dwh_prod.mv_ai_region_monthly"
-    ),
+    "region_target_view": os.getenv("FORECAST_TARGET_TABLE", "dwh_prod.mv_ai_region_monthly"),
     "value_col": '"Line Total After Tax (Local)"',
     "invoice_date_col": "invoicedate",
     "region_col": "regioncode",
@@ -45,13 +40,14 @@ FORECAST_CONFIG = {
     "history_months": 36,
     "min_history_months": 24,
     "as_of": None,
-    # Backtest checkpoints are working-day checkpoints inside a historical
-    # month.  A checkpoint forecast must only use observations available by
-    # that working day.
     "backtest_checkpoints": [4, 7, 10, 15, 20],
     "backtest_min_train_months": 24,
     "forecast_horizon_months": 1,
 }
+
+# Single source of truth for candidate model names used by backtest,
+# selection and ensemble layers.
+CANDIDATE_MODELS = ("baseline", "ets", "sarima", "xgboost")
 
 MODEL_CONFIG = {
     "ets": {
@@ -71,8 +67,6 @@ MODEL_CONFIG = {
         "colsample_bytree": 0.9,
         "random_state": 42,
     },
-    # Defaults only.  Production model weights are expected to be derived
-    # from leakage-safe backtest performance rather than fixed blindly.
     "ensemble_weights_default": {
         "baseline": 0.20,
         "ets": 0.25,
@@ -89,8 +83,6 @@ BACKTEST_CONFIG = {
 }
 
 OUTPUT_CONFIG = {
-    "forecast_table": os.getenv(
-        "FORECAST_OUTPUT_TABLE", "dwh_prod.forecast_sellin_eom"
-    ),
+    "forecast_table": os.getenv("FORECAST_OUTPUT_TABLE", "dwh_prod.forecast_sellin_eom"),
     "write_mode": "upsert",
 }
