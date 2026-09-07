@@ -45,18 +45,21 @@ authoritative regional target.
 12. PostgreSQL output primary key changed to `(regioncode, periode)`.
 13. Daily and target-source validation updated to the locked region-month contract,
     including duplicate target-key detection.
+14. Formal region-alignment QA rejects actual regions missing from the authoritative
+    target source and rejects target-only regions.
+15. Calendar QA validates unique/consecutive dates, binary working-day flags,
+    and enough working days for WD4/7/10/15/20.
+16. Automated validation tests and GitHub Actions CI have been added.
 
 ### Still required before production sign-off
 
 - Add **checkpoint-safe MTD/run-rate features to XGBoost** if testing confirms that
   the history-only XGBoost candidate should compete directly with the MTD baseline.
-- Add formal source mapping QA (unmapped, duplicate and conflicting region mappings)
-  and calendar completeness/consistency QA.
 - Add forecast reconciliation rules if forecasts are consumed together with a
   higher-level corporate aggregate.
 - Add explicit interval **coverage/backtest diagnostics** (for example empirical
   P10/P90 hit rates and interval width) before trusting uncertainty operationally.
-- Add automated unit/integration tests and CI execution against representative
+- Add broader model/feature/output integration tests against representative
   synthetic fixtures before live database execution.
 - Confirm the exact production column contract of `mv_ai_region_monthly` and
   `dimdate.networkeddays` against the live database.
@@ -120,6 +123,9 @@ forecast_engine/
 │   └── predict.py
 ├── output/
 │   └── postgres.py
+├── tests/
+│   └── test_validation.py
+├── .github/workflows/ci.yml
 └── main.py
 ```
 
@@ -133,6 +139,15 @@ cp .env.example .env
 ```
 
 Configure `PG_HOST`, `PG_PORT`, `PG_DB`, `PG_USER` and `PG_PASSWORD` in `.env`.
+
+## Test
+
+```bash
+pytest -q
+```
+
+Tests are also executed automatically by GitHub Actions on pushes to `master`
+and pull requests targeting `master`.
 
 ## Run
 
