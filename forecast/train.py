@@ -7,6 +7,7 @@ from data.extract import get_daily_sellin, get_region_monthly_targets, get_calen
 from data.validation import validate_daily_sellin, validate_targets
 from data.aggregation import to_monthly, complete_month_panel
 from features.historical import build_historical_features
+from features.working_day import historical_working_days_per_month
 from backtest.rolling import rolling_backtest
 from backtest.model_selection import select_best_model
 from models.xgboost_model import train_xgboost
@@ -26,6 +27,8 @@ def run_training_pipeline() -> dict:
 
     if daily.empty:
         raise ValueError("No Sell-In history available for the configured period.")
+    if calendar.empty:
+        raise ValueError("No calendar rows available for the configured period.")
 
     current_month = pd.Timestamp.today().normalize().replace(day=1)
     start = current_month - pd.DateOffset(months=history_months - 1)
@@ -40,6 +43,10 @@ def run_training_pipeline() -> dict:
 
     logger.info("Building leakage-safe historical features...")
     hist_features = build_historical_features(monthly, GROUP_COLS)
+    working_days = historical_working_days_per_month(calendar)
+    hist_features = hist_features.merge(working_days, on="periode", how="left", validate="many_to_one")
+    if hist_features["total_working_days"].isna().any():
+        raise ValueError("Calendar is missing total_working_days for one or more forecast months.")
 
     logger.info("Running WD4/7/10/15/20 rolling backtest for baseline/ETS/SARIMA/XGBoost...")
     backtest_results = rolling_backtest(
