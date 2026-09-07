@@ -1,47 +1,160 @@
-"""Rolling-origin backtest: at each past closed month, pretend we're standing
-right after that month closed and see how well each model would have
-predicted it, using only data available before that point."""
+"""Leakage-safe working-day checkpoint backtesting for monthly forecasts."""
 import logging
+
+import numpy as np
 import pandas as pd
 
+from backtest.metrics import bias, bias_pct, mae, rmse, wape
+from models.baseline import forecast_from_mtd
 from models.ets import forecast_ets
 from models.sarima import forecast_sarima
-from backtest.metrics import mape, mae, rmse, bias
 
 logger = logging.getLogger(__name__)
 
 
-def rolling_backtest(monthly_history: pd.DataFrame, group_cols: list, min_train_months: int = 6) -> pd.DataFrame:
+def _checkpoint_date(calendar: pd.DataFrame, periode: pd.Timestamp, checkpoint: int):
+    month = calendar[
+        (calendar["date"] >= periode)
+        & (calendar["date"] < periode + pd.offsets.MonthBegin(1))
+        & (calendar["is_working_day"].astype(bool))
+    ].sort_values("date")
+    if len(month) < checkpoint:
+        return None
+    return month.iloc[checkpoint - 1]["date"]
+
+
+def _safe_forecast(fn, series):
+    try:
+        value = fn(series)
+        if value is None or not np.isfinite(float(value)):
+            return None
+        return max(float(value), 0.0)
+    except Exception as exc:
+        logger.debug("%s failed during backtest: %s", getattr(fn, "__name__", "model"), exc)
+        return None
+
+
+def rolling_backtest(
+    monthly_history: pd.DataFrame,
+    group_cols: list,
+    min_train_months: int = 24,
+    daily_history: pd.DataFrame | None = None,
+    calendar: pd.DataFrame | None = None,
+    checkpoints: list[int] | None = None,
+) -> pd.DataFrame:
+    """Evaluate models at WD checkpoints without exposing future observations.
+
+    For every eligible historical target month, each checkpoint uses only:
+      * closed monthly history strictly before the target month for ETS/SARIMA;
+      * Sell-In actuals dated through the checkpoint for the run-rate baseline;
+      * the calendar's working-day count through the checkpoint.
+
+    The returned row is one row per forecast grain with metrics pooled across
+    all target months and checkpoints.  Checkpoint-specific metrics are also
+    retained for diagnostics and model monitoring.
     """
-    monthly_history: one row per (group..., periode, monthly_value), any order.
-    Returns per-group accuracy metrics for ets / sarima / naive (last-value) models,
-    computed over every month that could be backtested for that group.
-    """
-    results = []
-    for key, g in monthly_history.groupby(group_cols):
-        g = g.sort_values("periode").reset_index(drop=True)
-        if len(g) <= min_train_months:
-            continue
+    checkpoints = checkpoints or [4, 7, 10, 15, 20]
+    if daily_history is None or calendar is None:
+        raise ValueError("V2 backtest requires daily_history and calendar for WD checkpoints.")
 
-        y_true, ets_preds, sarima_preds, naive_preds = [], [], [], []
-        for cutoff in range(min_train_months, len(g)):
-            train_series = g.loc[:cutoff - 1, "monthly_value"]
-            actual = g.loc[cutoff, "monthly_value"]
+    required_monthly = set(group_cols + ["periode", "monthly_value"])
+    if not required_monthly.issubset(monthly_history.columns):
+        raise ValueError(f"monthly_history missing columns: {required_monthly - set(monthly_history.columns)}")
 
-            y_true.append(actual)
-            ets_preds.append(forecast_ets(train_series) or train_series.iloc[-1])
-            sarima_preds.append(forecast_sarima(train_series) or train_series.iloc[-1])
-            naive_preds.append(train_series.iloc[-1])  # last-value naive baseline
+    daily = daily_history.copy()
+    daily["invoice_date"] = pd.to_datetime(daily["invoice_date"])
+    daily["periode"] = daily["invoice_date"].dt.to_period("M").dt.to_timestamp()
+    calendar = calendar.copy()
+    calendar["date"] = pd.to_datetime(calendar["date"])
 
+    rows = []
+    for key, group in monthly_history.groupby(group_cols):
         key_vals = key if isinstance(key, tuple) else (key,)
-        row = dict(zip(group_cols, key_vals))
-        for model_name, preds in [("ets", ets_preds), ("sarima", sarima_preds), ("naive", naive_preds)]:
-            row.update({
-                f"{model_name}_mape": mape(y_true, preds),
-                f"{model_name}_mae": mae(y_true, preds),
-                f"{model_name}_rmse": rmse(y_true, preds),
-                f"{model_name}_bias": bias(y_true, preds),
-            })
-        results.append(row)
+        key_dict = dict(zip(group_cols, key_vals))
+        g = group.sort_values("periode").reset_index(drop=True)
+        target_months = g["periode"].drop_duplicates().sort_values()
 
-    return pd.DataFrame(results)
+        observations = {model: [] for model in ("baseline", "ets", "sarima")}
+        checkpoint_values = {model: {cp: [] for cp in checkpoints} for model in observations}
+
+        for target_month in target_months:
+            train = g[g["periode"] < target_month]
+            if len(train) < min_train_months:
+                continue
+
+            actual = g.loc[g["periode"] == target_month, "monthly_value"].sum()
+            target_daily = daily[
+                (daily["periode"] == target_month)
+                & daily[group_cols].eq(pd.Series(key_vals, index=group_cols)).all(axis=1)
+            ]
+            if target_daily.empty:
+                continue
+
+            series = train["monthly_value"].astype(float)
+            ts_preds = {
+                "ets": _safe_forecast(forecast_ets, series),
+                "sarima": _safe_forecast(forecast_sarima, series),
+            }
+
+            for checkpoint in checkpoints:
+                cp_date = _checkpoint_date(calendar, target_month, checkpoint)
+                if cp_date is None:
+                    continue
+
+                elapsed = int(
+                    calendar.loc[
+                        (calendar["date"] >= target_month)
+                        & (calendar["date"] <= cp_date),
+                        "is_working_day",
+                    ].astype(bool).sum()
+                )
+                total = int(
+                    calendar.loc[
+                        (calendar["date"] >= target_month)
+                        & (calendar["date"] < target_month + pd.offsets.MonthBegin(1)),
+                        "is_working_day",
+                    ].astype(bool).sum()
+                )
+                mtd = target_daily.loc[target_daily["invoice_date"] <= cp_date, "sellin_value"].sum()
+                baseline_pred = forecast_from_mtd(float(mtd), elapsed, total)
+
+                preds = {
+                    "baseline": baseline_pred,
+                    "ets": ts_preds["ets"],
+                    "sarima": ts_preds["sarima"],
+                }
+                for model, pred in preds.items():
+                    if pred is None or not np.isfinite(float(pred)):
+                        continue
+                    observations[model].append((float(actual), float(pred)))
+                    checkpoint_values[model][checkpoint].append((float(actual), float(pred)))
+
+        row = dict(key_dict)
+        for model, pairs in observations.items():
+            if not pairs:
+                for metric in ("wape", "mae", "rmse", "bias", "bias_pct"):
+                    row[f"{model}_{metric}"] = np.nan
+                row[f"{model}_observations"] = 0
+                continue
+            y_true, y_pred = zip(*pairs)
+            row.update(
+                {
+                    f"{model}_wape": wape(y_true, y_pred),
+                    f"{model}_mae": mae(y_true, y_pred),
+                    f"{model}_rmse": rmse(y_true, y_pred),
+                    f"{model}_bias": bias(y_true, y_pred),
+                    f"{model}_bias_pct": bias_pct(y_true, y_pred),
+                    f"{model}_observations": len(pairs),
+                }
+            )
+            for checkpoint in checkpoints:
+                cp_pairs = checkpoint_values[model][checkpoint]
+                if not cp_pairs:
+                    row[f"{model}_wd{checkpoint}_wape"] = np.nan
+                    continue
+                y_cp, p_cp = zip(*cp_pairs)
+                row[f"{model}_wd{checkpoint}_wape"] = wape(y_cp, p_cp)
+
+        rows.append(row)
+
+    return pd.DataFrame(rows)
