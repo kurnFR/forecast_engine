@@ -16,11 +16,12 @@ def _fixtures():
     dates = pd.date_range("2024-01-02", "2026-03-31", freq="B")
     calendar = pd.DataFrame({"date": dates, "is_working_day": 1})
 
-    # Provide one daily observation for each historical month so the
-    # checkpoint training examples have a valid MTD snapshot.  The scored
-    # month remains March 2026 and has ten observations to verify that
-    # post-checkpoint sales are excluded.
-    historical_dates = dates[::20]
+    # One daily observation in every historical month makes each prior
+    # target-month checkpoint snapshot valid for training.
+    historical_dates = [
+        dates[(dates >= month) & (dates < month + pd.offsets.MonthBegin(1))][0]
+        for month in months[:-1]
+    ]
     daily = pd.DataFrame(
         {
             "regioncode": ["R1"] * len(historical_dates),
@@ -28,8 +29,11 @@ def _fixtures():
             "sellin_value": [5.0] * len(historical_dates),
         }
     )
-    target_dates = dates[(dates >= pd.Timestamp("2026-03-02")) & (dates <= pd.Timestamp("2026-03-31"))]
-    target_dates = target_dates[:10]
+
+    target_month = pd.Timestamp("2026-03-01")
+    target_dates = dates[
+        (dates >= target_month) & (dates < target_month + pd.offsets.MonthBegin(1))
+    ][:10]
     daily = pd.concat(
         [
             daily,
@@ -45,7 +49,7 @@ def _fixtures():
     )
 
     targets = pd.DataFrame(
-        {"regioncode": ["R1"], "periode": [pd.Timestamp("2026-03-01")], "target_sellin": [300.0]}
+        {"regioncode": ["R1"], "periode": [target_month], "target_sellin": [300.0]}
     )
     return monthly, daily, calendar, targets
 
