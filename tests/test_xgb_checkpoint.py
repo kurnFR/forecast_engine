@@ -12,17 +12,38 @@ def _fixtures():
             "monthly_value": [100.0 + i for i in range(len(months))],
         }
     )
-    dates = pd.date_range("2026-03-02", "2026-03-31", freq="B")
-    calendar = pd.DataFrame(
-        {"date": dates, "is_working_day": 1}
-    )
+
+    dates = pd.date_range("2024-01-02", "2026-03-31", freq="B")
+    calendar = pd.DataFrame({"date": dates, "is_working_day": 1})
+
+    # Provide one daily observation for each historical month so the
+    # checkpoint training examples have a valid MTD snapshot.  The scored
+    # month remains March 2026 and has ten observations to verify that
+    # post-checkpoint sales are excluded.
+    historical_dates = dates[::20]
     daily = pd.DataFrame(
         {
-            "regioncode": ["R1"] * 10,
-            "invoice_date": dates[:10],
-            "sellin_value": [10.0] * 10,
+            "regioncode": ["R1"] * len(historical_dates),
+            "invoice_date": historical_dates,
+            "sellin_value": [5.0] * len(historical_dates),
         }
     )
+    target_dates = dates[(dates >= pd.Timestamp("2026-03-02")) & (dates <= pd.Timestamp("2026-03-31"))]
+    target_dates = target_dates[:10]
+    daily = pd.concat(
+        [
+            daily,
+            pd.DataFrame(
+                {
+                    "regioncode": ["R1"] * len(target_dates),
+                    "invoice_date": target_dates,
+                    "sellin_value": [10.0] * len(target_dates),
+                }
+            ),
+        ],
+        ignore_index=True,
+    )
+
     targets = pd.DataFrame(
         {"regioncode": ["R1"], "periode": [pd.Timestamp("2026-03-01")], "target_sellin": [300.0]}
     )
@@ -36,10 +57,21 @@ def test_checkpoint_row_excludes_post_checkpoint_sales():
         monthly, daily, calendar, targets, ["regioncode"],
         target_month, 4, ("R1",), 24,
     )
-    checkpoint_date = calendar.loc[calendar["is_working_day"].astype(bool), "date"].iloc[3]
-    expected = daily.loc[daily["invoice_date"] <= checkpoint_date, "sellin_value"].sum()
+    checkpoint_date = calendar.loc[
+        (calendar["date"] >= target_month)
+        & calendar["is_working_day"].astype(bool), "date"
+    ].iloc[3]
+    expected = daily.loc[
+        (daily["invoice_date"] >= target_month)
+        & (daily["invoice_date"] <= checkpoint_date), "sellin_value"
+    ].sum()
     assert row["mtd_value"] == expected
-    assert row["mtd_value"] < daily["sellin_value"].sum()
+    target_total = daily.loc[
+        (daily["invoice_date"] >= target_month)
+        & (daily["invoice_date"] < target_month + pd.offsets.MonthBegin(1)),
+        "sellin_value",
+    ].sum()
+    assert row["mtd_value"] < target_total
     assert row["target_sellin"] == 300.0
 
 
