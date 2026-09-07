@@ -42,7 +42,7 @@ def _residual_stats(pairs):
     return float(np.quantile(residuals, 0.10)), float(np.quantile(residuals, 0.90)), len(residuals)
 
 
-def rolling_backtest(monthly_history, group_cols, min_train_months=24, daily_history=None, calendar=None, checkpoints=None):
+def rolling_backtest(monthly_history, group_cols, min_train_months=24, daily_history=None, calendar=None, checkpoints=None, targets=None):
     """Evaluate candidate models at WD checkpoints with residual calibration."""
     checkpoints = checkpoints or [4, 7, 10, 15, 20]
     if daily_history is None or calendar is None:
@@ -116,7 +116,15 @@ def rolling_backtest(monthly_history, group_cols, min_train_months=24, daily_his
         rows.append(row)
 
     base_results = pd.DataFrame(rows)
-    xgb_results = rolling_xgb_checkpoint_backtest(monthly_history=monthly, daily_history=daily, calendar=calendar, group_cols=group_cols, checkpoints=checkpoints, min_train_months=min_train_months)
+    xgb_results = rolling_xgb_checkpoint_backtest(
+        monthly_history=monthly,
+        daily_history=daily,
+        calendar=calendar,
+        group_cols=group_cols,
+        checkpoints=checkpoints,
+        min_train_months=min_train_months,
+        targets=targets,
+    )
     if base_results.empty:
         return xgb_results
     return base_results.merge(xgb_results, on=group_cols, how="left")
