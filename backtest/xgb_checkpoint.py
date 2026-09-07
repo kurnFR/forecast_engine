@@ -13,6 +13,10 @@ from models.xgboost_model import train_xgboost, predict_xgboost
 logger = logging.getLogger(__name__)
 
 
+def _as_key(value):
+    return value if isinstance(value, tuple) else (value,)
+
+
 def _checkpoint_date(calendar: pd.DataFrame, periode: pd.Timestamp, checkpoint: int):
     month = calendar[
         (calendar["date"] >= periode)
@@ -38,7 +42,7 @@ def _xgb_checkpoint_features(
 
     rows = []
     for key, g in history.groupby(group_cols):
-        key_vals = key if isinstance(key, tuple) else (key,)
+        key_vals = _as_key(key)
         g = g.sort_values("periode")
         if len(g) < min_train_months:
             continue
@@ -99,14 +103,14 @@ def rolling_xgb_checkpoint_backtest(
 
     target_months = sorted(monthly["periode"].drop_duplicates())
     pair_store = {
-        key: {cp: [] for cp in checkpoints}
+        _as_key(key): {cp: [] for cp in checkpoints}
         for key in monthly[group_cols].drop_duplicates().itertuples(index=False, name=None)
     }
 
     for target_month in target_months:
         train = monthly[monthly["periode"] < target_month].copy()
         eligible_keys = {
-            key
+            _as_key(key)
             for key, g in train.groupby(group_cols)
             if len(g) >= min_train_months
         }
@@ -130,14 +134,14 @@ def rolling_xgb_checkpoint_backtest(
         if len(group_cols) == 1:
             actual_map = {(key,): float(value) for key, value in actuals.items()}
         else:
-            actual_map = {key if isinstance(key, tuple) else (key,): float(value) for key, value in actuals.items()}
+            actual_map = {_as_key(key): float(value) for key, value in actuals.items()}
 
         for cp in checkpoints:
             cp_date = _checkpoint_date(calendar, target_month, cp)
             if cp_date is None:
                 continue
             for key, row in feature_rows.groupby(group_cols):
-                key = key if isinstance(key, tuple) else (key,)
+                key = _as_key(key)
                 if key not in eligible_keys:
                     continue
                 actual = actual_map.get(key)
