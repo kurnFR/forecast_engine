@@ -50,6 +50,12 @@ authoritative regional target.
 15. Calendar QA validates unique/consecutive dates, binary working-day flags,
     and enough working days for WD4/7/10/15/20.
 16. Automated validation tests and GitHub Actions CI have been added.
+17. A **strict leakage-safe interval backtest** now rebuilds OOS candidate forecasts
+    and calibrates each target month's P10/P90 only from OOS residuals belonging to
+    earlier target months for the same region and checkpoint. The target month's own
+    residual is never available to its interval calibration.
+18. The strict interval backtest is integrated into the training pipeline as
+    `interval_backtest_results`, with interval width and normalized width diagnostics.
 
 ### Still required before production sign-off
 
@@ -57,12 +63,34 @@ authoritative regional target.
   the history-only XGBoost candidate should compete directly with the MTD baseline.
 - Add forecast reconciliation rules if forecasts are consumed together with a
   higher-level corporate aggregate.
-- Add explicit interval **coverage/backtest diagnostics** (for example empirical
-  P10/P90 hit rates and interval width) before trusting uncertainty operationally.
 - Add broader model/feature/output integration tests against representative
   synthetic fixtures before live database execution.
 - Confirm the exact production column contract of `mv_ai_region_monthly` and
   `dimdate.networkeddays` against the live database.
+- Run the full pipeline against representative production-like data and review
+  interval coverage before accepting the P10/P90 calibration operationally.
+
+## Interval backtest methodology
+
+The production residual pool can legitimately use historical OOS residuals after
+those target months have become past data. That is different from evaluating
+whether an interval method would have worked at the time of a historical forecast.
+
+For strict interval validation, the engine therefore performs a second rolling
+pass:
+
+1. Build candidate forecasts for each eligible `regioncode × target month ×
+   checkpoint` using only information available at that checkpoint.
+2. For target month `T`, restrict calibration data to target months `< T`.
+3. Keep calibration within the same region and checkpoint.
+4. Derive inverse-WAPE P50 weights from those earlier OOS rows only.
+5. Derive each candidate's residual q10/q90 from those earlier OOS rows only.
+6. Combine the candidate residual ranges around the leakage-safe P50.
+7. Skip an interval when no prior OOS residual calibration exists rather than
+   fabricating a validated interval for the first eligible target.
+
+This makes historical interval coverage a genuine out-of-time diagnostic rather
+than a retrospective in-sample calibration check.
 
 ## Data flow
 
@@ -115,7 +143,9 @@ forecast_engine/
 │   └── xgboost_model.py
 ├── backtest/
 │   ├── rolling.py
+│   ├── rolling_intervals.py
 │   ├── xgb_checkpoint.py
+│   ├── intervals.py
 │   ├── metrics.py
 │   └── model_selection.py
 ├── forecast/
@@ -124,7 +154,8 @@ forecast_engine/
 ├── output/
 │   └── postgres.py
 ├── tests/
-│   └── test_validation.py
+│   ├── test_validation.py
+│   └── test_rolling_intervals.py
 ├── .github/workflows/ci.yml
 └── main.py
 ```
