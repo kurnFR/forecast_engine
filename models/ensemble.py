@@ -1,12 +1,13 @@
 """Backtest-driven ensemble and residual-calibrated prediction intervals."""
 from typing import Optional
+import logging
 
 import numpy as np
 import pandas as pd
 
-from config import FORECAST_CONFIG, MODEL_CONFIG
+from config import CANDIDATE_MODELS, FORECAST_CONFIG, MODEL_CONFIG
 
-CANDIDATE_MODELS = ("baseline", "ets", "sarima", "xgboost")
+logger = logging.getLogger(__name__)
 
 
 def _row_backtest_weights(row: pd.Series) -> dict:
@@ -18,18 +19,21 @@ def _row_backtest_weights(row: pd.Series) -> dict:
             scores[model] = float(row[col])
     if not scores:
         scores = {k: float(v) for k, v in MODEL_CONFIG["ensemble_weights_default"].items() if k in CANDIDATE_MODELS}
+        logger.info("No valid backtest model scores; using configured ensemble fallback weights.")
     inverse = {model: 1.0 / score for model, score in scores.items() if score > 0}
     total = sum(inverse.values())
-    return {model: value / total for model, value in inverse.items()} if total > 0 else {"baseline": 1.0}
+    if total > 0:
+        return {model: value / total for model, value in inverse.items()}
+    logger.warning("Ensemble weight normalization failed; falling back to baseline-only forecast.")
+    return {"baseline": 1.0}
 
 
 def _checkpoint_for_row(row: pd.Series) -> Optional[int]:
-    """Select the latest completed configured checkpoint for current MTD."""
     value = row.get("elapsed_working_days")
     if pd.isna(value):
         return None
     elapsed = int(value)
-    checkpoints = sorted(int(cp) for cp in FORECAST_CONFIG.get("backtest_checkpoints", [4, 7, 10, 15, 20]))
+    checkpoints = sorted(int(cp) for cp in FORECAST_CONFIG["backtest_checkpoints"])
     completed = [cp for cp in checkpoints if cp <= elapsed]
     return completed[-1] if completed else (checkpoints[0] if checkpoints else None)
 
@@ -52,27 +56,21 @@ def _residual_interval(row: pd.Series, weights: dict, p50: float) -> tuple[float
     checkpoint = _checkpoint_for_row(row)
     lower, upper, used = [], [], []
     for model, weight in weights.items():
-        if checkpoint is not None:
-            q10 = row.get(f"{model}_wd{checkpoint}_residual_q10")
-            q90 = row.get(f"{model}_wd{checkpoint}_residual_q90")
-        else:
-            q10 = row.get(f"{model}_residual_q10")
-            q90 = row.get(f"{model}_residual_q90")
+        q10 = row.get(f"{model}_wd{checkpoint}_residual_q10") if checkpoint is not None else row.get(f"{model}_residual_q10")
+        q90 = row.get(f"{model}_wd{checkpoint}_residual_q90") if checkpoint is not None else row.get(f"{model}_residual_q90")
         if pd.notna(q10) and pd.notna(q90) and np.isfinite(float(q10)) and np.isfinite(float(q90)):
-            lower.append(float(q10))
-            upper.append(float(q90))
-            used.append(float(weight))
+            lower.append(float(q10)); upper.append(float(q90)); used.append(float(weight))
 
     if not used and checkpoint is not None:
+        logger.warning("No checkpoint-specific residual calibration available for WD%s; trying pooled residuals.", checkpoint)
         for model, weight in weights.items():
             q10 = row.get(f"{model}_residual_q10")
             q90 = row.get(f"{model}_residual_q90")
             if pd.notna(q10) and pd.notna(q90) and np.isfinite(float(q10)) and np.isfinite(float(q90)):
-                lower.append(float(q10))
-                upper.append(float(q90))
-                used.append(float(weight))
+                lower.append(float(q10)); upper.append(float(q90)); used.append(float(weight))
 
     if not used:
+        logger.warning("No residual calibration available; using conservative fallback interval around P50.")
         spread = max(abs(p50) * 0.15, 1.0)
         return max(p50 - 1.28 * spread, 0.0), max(p50 + 1.28 * spread, 0.0)
 
@@ -84,7 +82,6 @@ def _residual_interval(row: pd.Series, weights: dict, p50: float) -> tuple[float
 
 
 def prediction_interval(row: pd.Series, weights: Optional[dict] = None) -> tuple[float, float, float]:
-    """Return P10/P50/P90 using checkpoint-specific OOS residuals."""
     effective_weights = weights or _row_backtest_weights(row)
     p50 = combine_forecasts(row, effective_weights)
     if not np.isfinite(p50):
@@ -94,7 +91,6 @@ def prediction_interval(row: pd.Series, weights: Optional[dict] = None) -> tuple
 
 
 def build_ensemble(df: pd.DataFrame, weights: Optional[dict] = None) -> pd.DataFrame:
-    """Build production P10/P50/P90 from candidate forecasts and OOS residual calibration."""
     out = df.copy()
     intervals = out.apply(lambda r: prediction_interval(r, weights), axis=1, result_type="expand")
     intervals.columns = ["forecast_p10", "forecast_p50", "forecast_p90"]
