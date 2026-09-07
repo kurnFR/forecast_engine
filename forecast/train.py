@@ -15,8 +15,9 @@ from features.historical import build_historical_features
 from features.working_day import historical_working_days_per_month
 from backtest.rolling import rolling_backtest
 from backtest.rolling_intervals import rolling_interval_backtest
+from backtest.xgb_checkpoint import _build_training_frame
 from backtest.model_selection import select_best_model
-from models.xgboost_model import train_xgboost
+from models.xgboost_model import train_xgboost, train_xgboost_checkpoint_models
 from config import FORECAST_CONFIG
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,7 @@ def run_training_pipeline() -> dict:
         daily_history=daily,
         calendar=calendar,
         checkpoints=FORECAST_CONFIG["backtest_checkpoints"],
+        targets=targets,
     )
     best_models = select_best_model(backtest_results, GROUP_COLS)
 
@@ -79,9 +81,24 @@ def run_training_pipeline() -> dict:
         min_train_months=FORECAST_CONFIG["backtest_min_train_months"],
     )
 
-    logger.info("Training pooled XGBoost on closed region-month features...")
+    logger.info("Training pooled history-only XGBoost...")
     train_features = hist_features[hist_features["periode"] < current_month].copy()
     xgb_model = train_xgboost(train_features)
+
+    logger.info("Training checkpoint-aware XGBoost models...")
+    checkpoint_training = []
+    for checkpoint in FORECAST_CONFIG["backtest_checkpoints"]:
+        frame = _build_training_frame(
+            monthly, daily, calendar, targets, GROUP_COLS,
+            current_month, checkpoint, FORECAST_CONFIG["backtest_min_train_months"]
+        )
+        if not frame.empty:
+            checkpoint_training.append(frame)
+    checkpoint_training = pd.concat(checkpoint_training, ignore_index=True) if checkpoint_training else pd.DataFrame()
+    xgb_checkpoint_models = train_xgboost_checkpoint_models(
+        checkpoint_training,
+        FORECAST_CONFIG["backtest_checkpoints"],
+    )
 
     return {
         "daily": daily,
@@ -93,4 +110,5 @@ def run_training_pipeline() -> dict:
         "interval_backtest_results": interval_backtest_results,
         "best_models": best_models,
         "xgb_model": xgb_model,
+        "xgb_checkpoint_models": xgb_checkpoint_models,
     }
