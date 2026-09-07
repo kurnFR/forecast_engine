@@ -6,9 +6,26 @@ import pandas as pd
 
 from config import MODEL_CONFIG
 
+CANDIDATE_MODELS = ("baseline", "ets", "sarima", "xgboost")
+
+
+def _row_backtest_weights(row: pd.Series) -> dict:
+    """Derive inverse-WAPE weights from checkpoint backtest scores when present."""
+    scores = {}
+    for model in CANDIDATE_MODELS:
+        col = f"{model}_checkpoint_score"
+        if col in row and pd.notna(row[col]) and float(row[col]) > 0:
+            scores[model] = float(row[col])
+    if not scores:
+        return MODEL_CONFIG["ensemble_weights_default"]
+
+    inverse = {model: 1.0 / score for model, score in scores.items()}
+    total = sum(inverse.values())
+    return {model: value / total for model, value in inverse.items()}
+
 
 def combine_forecasts(row: pd.Series, weights: Optional[dict] = None) -> float:
-    weights = weights or MODEL_CONFIG["ensemble_weights_default"]
+    weights = weights or _row_backtest_weights(row)
     available = {
         k: float(row[f"forecast_{k}"])
         for k in weights
@@ -21,20 +38,20 @@ def combine_forecasts(row: pd.Series, weights: Optional[dict] = None) -> float:
 
 
 def prediction_interval(row: pd.Series, weights: Optional[dict] = None) -> tuple[float, float, float]:
-    """Return P10/P50/P90 from model consensus and cross-model dispersion.
+    """Return a provisional P10/P50/P90 interval.
 
-    This is a provisional interval until residual-quantile calibration is
-    added from the full checkpoint backtest.  It is deliberately conservative
-    and never returns a negative Sell-In forecast.
+    P50 uses inverse-WAPE backtest weights when checkpoint scores are attached
+    to the row.  P10/P90 remain explicitly provisional until residual-based
+    calibration is added from out-of-sample checkpoint errors.
     """
     p50 = combine_forecasts(row, weights)
     if not np.isfinite(p50):
         return np.nan, np.nan, np.nan
 
-    weights = weights or MODEL_CONFIG["ensemble_weights_default"]
+    effective_weights = weights or _row_backtest_weights(row)
     values = [
         float(row[f"forecast_{k}"])
-        for k in weights
+        for k in effective_weights
         if f"forecast_{k}" in row and pd.notna(row[f"forecast_{k}"])
     ]
     if len(values) < 2:
