@@ -1,70 +1,91 @@
-"""Extraction of raw sell-in facts, region targets, and calendar data."""
+"""V2 data extraction: region-level Sell-In history, targets and calendar."""
 import pandas as pd
 
 from config import SOURCE
 from db import read_sql
 
 
-def get_daily_sellin(lookback_days: int = 400) -> pd.DataFrame:
+def get_daily_sellin(history_months: int = 36) -> pd.DataFrame:
+    """Return daily Sell-In aggregated at region grain.
+
+    The extraction deliberately contains no branch dimension join.  Region is
+    the locked V2 forecast grain, and avoiding an intermediate branch mapping
+    removes a major source of double counting and mapping leakage.
     """
-    Daily sell-in value per region + branch, joined via the branch dimension.
-    NOTE: the join is fact.city = branch_dim.kota - verify this against your
-    real customer/branch mapping (see config.SOURCE for how to change it).
-    """
+    months = max(int(history_months), 1)
     sql = f"""
         SELECT
-            d.regioncode,
-            d.regionname,
-            d.branchcode,
-            d.branchname,
-            f.{SOURCE['invoice_date_col']} AS invoice_date,
-            SUM(f.{SOURCE['value_col']}) AS sellin_value
+            f.{SOURCE['region_col']} AS regioncode,
+            f.{SOURCE['invoice_date_col']}::date AS invoice_date,
+            SUM(f.{SOURCE['value_col']})::numeric AS sellin_value
         FROM {SOURCE['fact_table']} f
-        JOIN {SOURCE['branch_dim']} d
-          ON f.{SOURCE['branch_join_col_fact']} = d.{SOURCE['branch_join_col_dim']}
-        WHERE f.{SOURCE['invoice_date_col']} >= CURRENT_DATE - INTERVAL '{lookback_days} days'
-        GROUP BY 1, 2, 3, 4, 5
-        ORDER BY 5
+        WHERE f.{SOURCE['invoice_date_col']} >=
+              date_trunc('month', CURRENT_DATE) - INTERVAL '{months - 1} months'
+          AND f.{SOURCE['invoice_date_col']} <
+              date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'
+          AND f.{SOURCE['region_col']} IS NOT NULL
+        GROUP BY 1, 2
+        ORDER BY 2, 1
     """
     df = read_sql(sql)
-    df["invoice_date"] = pd.to_datetime(df["invoice_date"])
+    if not df.empty:
+        df["invoice_date"] = pd.to_datetime(df["invoice_date"])
+        df["sellin_value"] = pd.to_numeric(df["sellin_value"], errors="coerce").fillna(0.0)
     return df
 
 
-def get_region_monthly_targets() -> pd.DataFrame:
-    """Region-level monthly target & actual sell-in, from the pre-built view."""
+def get_region_monthly_targets(history_months: int = 36) -> pd.DataFrame:
+    """Read region/month targets directly from mv_ai_region_monthly.
+
+    No pro-rata branch target allocation is performed in V2.  The target
+    source is authoritative at the same grain as the forecast.
+    """
+    months = max(int(history_months), 1)
     sql = f"""
         SELECT
-            periode,
+            periode::date AS periode,
             regioncode,
-            regionname,
-            totaltargetsellin AS target_sellin,
-            totalrealsellin  AS actual_sellin
+            target_sellin
         FROM {SOURCE['region_target_view']}
         WHERE regioncode IS NOT NULL
-        ORDER BY periode
+          AND periode >= date_trunc('month', CURRENT_DATE) - INTERVAL '{months - 1} months'
+          AND periode < date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'
+        ORDER BY periode, regioncode
     """
     df = read_sql(sql)
-    df["periode"] = pd.to_datetime(df["periode"])
+    if not df.empty:
+        df["periode"] = pd.to_datetime(df["periode"])
+        df["target_sellin"] = pd.to_numeric(df["target_sellin"], errors="coerce")
     return df
 
 
-def get_calendar(lookback_days: int = 400) -> pd.DataFrame:
-    """Calendar with a working-day flag, used to compute elapsed/remaining working days."""
+def get_calendar(history_months: int = 36) -> pd.DataFrame:
+    """Return the daily calendar and networkeddays working-day indicator."""
+    months = max(int(history_months), 1)
     sql = f"""
         SELECT
             dates::date AS date,
-            years, months, daysofmonths, monthsname,
-            {SOURCE['working_day_col']} AS is_working_day
+            years,
+            months,
+            daysofmonths,
+            monthsname,
+            {SOURCE['networked_days_col']} AS networkeddays
         FROM {SOURCE['date_dim']}
-        WHERE dates >= CURRENT_DATE - INTERVAL '{lookback_days} days'
-          AND dates <= (date_trunc('month', CURRENT_DATE) + INTERVAL '1 month' - INTERVAL '1 day')
+        WHERE dates >= date_trunc('month', CURRENT_DATE) - INTERVAL '{months - 1} months'
+          AND dates < date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'
         ORDER BY dates
     """
     df = read_sql(sql)
-    df["date"] = pd.to_datetime(df["date"])
-    # normalize working-day flag to boolean regardless of source being text or numeric
-    df["is_working_day"] = (
-        df["is_working_day"].astype(str).str.strip().isin(["1", "1.0", "true", "True", "Y", "y"])
-    )
+    if not df.empty:
+        df["date"] = pd.to_datetime(df["date"])
+        # networkeddays is normalized to a numeric working-day flag.  This
+        # accepts common 0/1, boolean and Y/N source representations.
+        raw = df["networkeddays"]
+        if pd.api.types.is_bool_dtype(raw):
+            df["is_working_day"] = raw.astype(int)
+        else:
+            normalized = raw.astype(str).str.strip().str.lower()
+            df["is_working_day"] = normalized.isin(
+                ["1", "1.0", "true", "t", "y", "yes"]
+            ).astype(int)
     return df
