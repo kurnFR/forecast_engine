@@ -55,7 +55,7 @@ def validate_targets(df: pd.DataFrame) -> pd.DataFrame:
     required = {"regioncode", "periode", "target_sellin"}
     missing = required - set(df.columns)
     if missing:
-        raise DataValidationError(f"Missing target columns: {missing}")
+        raise DataValidationError(f"Missing expected columns: {missing}")
 
     df = df.copy()
     df["periode"] = pd.to_datetime(df["periode"], errors="coerce")
@@ -72,3 +72,54 @@ def validate_targets(df: pd.DataFrame) -> pd.DataFrame:
             "the V2 target contract requires one row per region-month."
         )
     return df
+
+
+def validate_region_alignment(daily: pd.DataFrame, targets: pd.DataFrame) -> None:
+    """Reject region-code mapping drift between actuals and authoritative targets."""
+    daily_regions = set(daily["regioncode"].dropna().astype(str).str.strip())
+    target_regions = set(targets["regioncode"].dropna().astype(str).str.strip())
+    missing_targets = sorted(daily_regions - target_regions)
+    orphan_targets = sorted(target_regions - daily_regions)
+    if missing_targets or orphan_targets:
+        raise DataValidationError(
+            "Region mapping mismatch between Sell-In and target source: "
+            f"missing target regions={missing_targets[:10]}, "
+            f"target-only regions={orphan_targets[:10]}"
+        )
+
+
+def validate_calendar(calendar: pd.DataFrame, required_checkpoints: list[int] | None = None) -> pd.DataFrame:
+    """Validate the daily calendar and normalized networkeddays indicator."""
+    if calendar.empty:
+        raise DataValidationError("Calendar is empty - check the date dimension query.")
+    required = {"date", "is_working_day"}
+    missing = required - set(calendar.columns)
+    if missing:
+        raise DataValidationError(f"Calendar is missing expected columns: {missing}")
+
+    c = calendar.copy()
+    c["date"] = pd.to_datetime(c["date"], errors="coerce")
+    if c["date"].isna().any():
+        raise DataValidationError("Calendar contains invalid date values.")
+    if c["date"].duplicated().any():
+        raise DataValidationError("Calendar contains duplicate dates.")
+
+    c["is_working_day"] = pd.to_numeric(c["is_working_day"], errors="coerce")
+    if c["is_working_day"].isna().any() or not c["is_working_day"].isin([0, 1]).all():
+        raise DataValidationError("Calendar is_working_day must contain only 0/1 values.")
+    c = c.sort_values("date").reset_index(drop=True)
+    if len(c) > 1:
+        gaps = c["date"].diff().dropna().dt.days
+        if not gaps.eq(1).all():
+            raise DataValidationError("Calendar contains missing/non-consecutive dates.")
+
+    checkpoints = required_checkpoints or []
+    if checkpoints:
+        month_wd = c.groupby(c["date"].dt.to_period("M"))["is_working_day"].sum()
+        insufficient = month_wd[month_wd < max(checkpoints)]
+        if not insufficient.empty:
+            raise DataValidationError(
+                "Calendar does not contain enough working days for required checkpoints: "
+                f"{insufficient.to_dict()}"
+            )
+    return c
