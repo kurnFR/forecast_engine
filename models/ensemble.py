@@ -1,5 +1,5 @@
 """Backtest-driven ensemble and residual-calibrated prediction intervals."""
-from typing import Optional
+from typing import Optional, Tuple
 import logging
 
 import numpy as np
@@ -51,7 +51,7 @@ def combine_forecasts(row: pd.Series, weights: Optional[dict] = None) -> float:
     return float(sum(weights[k] * value for k, value in available.items()) / w_sum)
 
 
-def _residual_interval(row: pd.Series, weights: dict, p50: float) -> tuple[float, float]:
+def _residual_interval(row: pd.Series, weights: dict, p50: float) -> Tuple[float, float]:
     """Combine checkpoint-specific OOS residual quantiles around ensemble P50."""
     checkpoint = _checkpoint_for_row(row)
     lower, upper, used = [], [], []
@@ -81,7 +81,7 @@ def _residual_interval(row: pd.Series, weights: dict, p50: float) -> tuple[float
     return max(p50 + q10, 0.0), max(p50 + q90, 0.0)
 
 
-def prediction_interval(row: pd.Series, weights: Optional[dict] = None) -> tuple[float, float, float]:
+def prediction_interval(row: pd.Series, weights: Optional[dict] = None) -> Tuple[float, float, float]:
     effective_weights = weights or _row_backtest_weights(row)
     p50 = combine_forecasts(row, effective_weights)
     if not np.isfinite(p50):
@@ -115,3 +115,4 @@ def interval_coverage_metrics(actual, p10, p50, p90) -> dict:
         "mean_interval_width": float(np.mean(hi - lo)),
         "mae_p50": float(np.mean(np.abs(a - mid))),
     }
+}
