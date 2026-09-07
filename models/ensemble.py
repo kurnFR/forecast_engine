@@ -115,4 +115,3 @@ def interval_coverage_metrics(actual, p10, p50, p90) -> dict:
         "mean_interval_width": float(np.mean(hi - lo)),
         "mae_p50": float(np.mean(np.abs(a - mid))),
     }
-}
