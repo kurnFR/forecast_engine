@@ -28,14 +28,13 @@ def run_training_pipeline() -> dict:
     if daily.empty:
         raise ValueError("No Sell-In history available for the configured period.")
 
-    start = pd.Timestamp.today().normalize().replace(day=1) - pd.DateOffset(months=history_months - 1)
-    end = pd.Timestamp.today().normalize().replace(day=1)
+    current_month = pd.Timestamp.today().normalize().replace(day=1)
+    start = current_month - pd.DateOffset(months=history_months - 1)
     monthly_raw = to_monthly(daily, GROUP_COLS)
-    monthly = complete_month_panel(monthly_raw, GROUP_COLS, start, end)
+    monthly = complete_month_panel(monthly_raw, GROUP_COLS, start, current_month)
 
-    # Keep only regions with enough closed history for reliable model
-    # comparison.  Current/incomplete month is excluded from model training.
-    current_month = end
+    # Model eligibility is based on closed months only.  The in-progress month
+    # is never used as training history for the time-series models.
     closed = monthly[monthly["periode"] < current_month].copy()
     history_counts = closed.groupby(GROUP_COLS)["periode"].nunique()
     eligible = history_counts[history_counts >= FORECAST_CONFIG["min_history_months"]].index
@@ -50,6 +49,7 @@ def run_training_pipeline() -> dict:
         monthly,
         GROUP_COLS,
         min_train_months=FORECAST_CONFIG["backtest_min_train_months"],
+        daily_history=daily,
         calendar=calendar,
         checkpoints=FORECAST_CONFIG["backtest_checkpoints"],
     )
