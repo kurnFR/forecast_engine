@@ -14,6 +14,7 @@ from data.aggregation import to_monthly, complete_month_panel
 from features.historical import build_historical_features
 from features.working_day import historical_working_days_per_month
 from backtest.rolling import rolling_backtest
+from backtest.rolling_intervals import rolling_interval_backtest
 from backtest.model_selection import select_best_model
 from models.xgboost_model import train_xgboost
 from config import FORECAST_CONFIG
@@ -68,6 +69,16 @@ def run_training_pipeline() -> dict:
     )
     best_models = select_best_model(backtest_results, GROUP_COLS)
 
+    logger.info("Running strict leakage-safe P10/P50/P90 interval backtest...")
+    interval_backtest_results = rolling_interval_backtest(
+        monthly_history=monthly,
+        daily_history=daily,
+        calendar=calendar,
+        group_cols=GROUP_COLS,
+        checkpoints=FORECAST_CONFIG["backtest_checkpoints"],
+        min_train_months=FORECAST_CONFIG["backtest_min_train_months"],
+    )
+
     logger.info("Training pooled XGBoost on closed region-month features...")
     train_features = hist_features[hist_features["periode"] < current_month].copy()
     xgb_model = train_xgboost(train_features)
@@ -79,6 +90,7 @@ def run_training_pipeline() -> dict:
         "calendar": calendar,
         "targets": targets,
         "backtest_results": backtest_results,
+        "interval_backtest_results": interval_backtest_results,
         "best_models": best_models,
         "xgb_model": xgb_model,
     }
