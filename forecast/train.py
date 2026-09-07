@@ -79,6 +79,7 @@ def run_training_pipeline() -> dict:
         group_cols=GROUP_COLS,
         checkpoints=FORECAST_CONFIG["backtest_checkpoints"],
         min_train_months=FORECAST_CONFIG["backtest_min_train_months"],
+        targets=targets,
     )
 
     logger.info("Training pooled history-only XGBoost...")
