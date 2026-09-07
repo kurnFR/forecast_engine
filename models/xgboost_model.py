@@ -1,6 +1,6 @@
 """Leakage-safe XGBoost models for region-month Sell-In forecasting."""
 import logging
-from typing import Optional
+from typing import List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -28,7 +28,11 @@ CHECKPOINT_FEATURE_COLS = FEATURE_COLS + [
 ]
 
 
-def _training_frame(train_df: pd.DataFrame, target_col: str, feature_cols: list[str]) -> tuple[pd.DataFrame, list[str]]:
+def _training_frame(
+    train_df: pd.DataFrame,
+    target_col: str,
+    feature_cols: List[str],
+) -> Tuple[pd.DataFrame, List[str]]:
     cols = [c for c in feature_cols if c in train_df.columns]
     if not cols:
         raise ValueError("No XGBoost feature columns are present.")
@@ -59,11 +63,11 @@ def train_xgboost_checkpoint(train_df: pd.DataFrame, target_col: str = "monthly_
 
 def train_xgboost_checkpoint_models(
     training_frame: pd.DataFrame,
-    checkpoints: list[int],
+    checkpoints: List[int],
     target_col: str = "monthly_value",
-) -> dict[int, XGBRegressor]:
+) -> dict:
     """Train one pooled XGBoost model per working-day checkpoint."""
-    models: dict[int, XGBRegressor] = {}
+    models = {}
     for checkpoint in checkpoints:
         frame = training_frame[training_frame["checkpoint"] == checkpoint].copy()
         if frame.empty:
