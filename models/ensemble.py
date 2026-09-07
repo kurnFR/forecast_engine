@@ -1,4 +1,4 @@
-"""Combine candidate forecasts and derive a conservative prediction interval."""
+"""Backtest-driven ensemble and residual-calibrated prediction intervals."""
 from typing import Optional
 
 import numpy as np
@@ -10,18 +10,18 @@ CANDIDATE_MODELS = ("baseline", "ets", "sarima", "xgboost")
 
 
 def _row_backtest_weights(row: pd.Series) -> dict:
-    """Derive inverse-WAPE weights from checkpoint backtest scores when present."""
+    """Derive normalized inverse-WAPE weights from checkpoint backtest scores."""
     scores = {}
     for model in CANDIDATE_MODELS:
         col = f"{model}_checkpoint_score"
-        if col in row and pd.notna(row[col]) and float(row[col]) > 0:
+        if col in row and pd.notna(row[col]) and np.isfinite(float(row[col])) and float(row[col]) > 0:
             scores[model] = float(row[col])
     if not scores:
-        return MODEL_CONFIG["ensemble_weights_default"]
+        scores = {k: float(v) for k, v in MODEL_CONFIG["ensemble_weights_default"].items() if k in CANDIDATE_MODELS}
 
-    inverse = {model: 1.0 / score for model, score in scores.items()}
+    inverse = {model: 1.0 / score for model, score in scores.items() if score > 0}
     total = sum(inverse.values())
-    return {model: value / total for model, value in inverse.items()}
+    return {model: value / total for model, value in inverse.items()} if total > 0 else {"baseline": 1.0}
 
 
 def combine_forecasts(row: pd.Series, weights: Optional[dict] = None) -> float:
@@ -37,33 +37,44 @@ def combine_forecasts(row: pd.Series, weights: Optional[dict] = None) -> float:
     return float(sum(weights[k] * value for k, value in available.items()) / w_sum)
 
 
-def prediction_interval(row: pd.Series, weights: Optional[dict] = None) -> tuple[float, float, float]:
-    """Return a provisional P10/P50/P90 interval.
+def _residual_interval(row: pd.Series, weights: dict, p50: float) -> tuple[float, float]:
+    """Combine model-specific OOS residual quantiles around the ensemble P50."""
+    lower, upper, used = [], [], []
+    for model, weight in weights.items():
+        q10 = row.get(f"{model}_residual_q10")
+        q90 = row.get(f"{model}_residual_q90")
+        if pd.notna(q10) and pd.notna(q90) and np.isfinite(float(q10)) and np.isfinite(float(q90)):
+            lower.append(float(q10))
+            upper.append(float(q90))
+            used.append(float(weight))
 
-    P50 uses inverse-WAPE backtest weights when checkpoint scores are attached
-    to the row.  P10/P90 remain explicitly provisional until residual-based
-    calibration is added from out-of-sample checkpoint errors.
-    """
-    p50 = combine_forecasts(row, weights)
+    if not used:
+        # Explicit safety fallback for a region with insufficient residual history.
+        spread = max(abs(p50) * 0.15, 1.0)
+        return max(p50 - 1.28 * spread, 0.0), max(p50 + 1.28 * spread, 0.0)
+
+    weights_arr = np.asarray(used, dtype=float)
+    weights_arr /= weights_arr.sum()
+    q10 = float(np.dot(weights_arr, np.asarray(lower)))
+    q90 = float(np.dot(weights_arr, np.asarray(upper)))
+    return max(p50 + q10, 0.0), max(p50 + q90, 0.0)
+
+
+def prediction_interval(row: pd.Series, weights: Optional[dict] = None) -> tuple[float, float, float]:
+    """Return P10/P50/P90 using backtest-derived weights and OOS residuals."""
+    effective_weights = weights or _row_backtest_weights(row)
+    p50 = combine_forecasts(row, effective_weights)
     if not np.isfinite(p50):
         return np.nan, np.nan, np.nan
-
-    effective_weights = weights or _row_backtest_weights(row)
-    values = [
-        float(row[f"forecast_{k}"])
-        for k in effective_weights
-        if f"forecast_{k}" in row and pd.notna(row[f"forecast_{k}"])
-    ]
-    if len(values) < 2:
-        spread = abs(p50) * 0.15
-    else:
-        spread = max(float(np.std(values, ddof=1)), abs(p50) * 0.05)
-
-    return max(p50 - 1.28 * spread, 0.0), p50, max(p50 + 1.28 * spread, 0.0)
+    p10, p90 = _residual_interval(row, effective_weights, p50)
+    return p10, p50, p90
 
 
 def build_ensemble(df: pd.DataFrame, weights: Optional[dict] = None) -> pd.DataFrame:
+    """Build production P10/P50/P90 from candidate forecasts and OOS residual calibration."""
     out = df.copy()
-    intervals = out.apply(lambda r: prediction_interval(r, weights), axis=1, result_type="expand")
+    intervals = out.apply(
+        lambda r: prediction_interval(r, weights), axis=1, result_type="expand"
+    )
     intervals.columns = ["forecast_p10", "forecast_p50", "forecast_p90"]
     return pd.concat([out, intervals], axis=1)
