@@ -14,11 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 def _checkpoint_date(calendar: pd.DataFrame, periode: pd.Timestamp, checkpoint: int):
-    month = calendar[
-        (calendar["date"] >= periode)
-        & (calendar["date"] < periode + pd.offsets.MonthBegin(1))
-        & calendar["is_working_day"].astype(bool)
-    ].sort_values("date")
+    month = calendar[(calendar["date"] >= periode) & (calendar["date"] < periode + pd.offsets.MonthBegin(1)) & calendar["is_working_day"].astype(bool)].sort_values("date")
     if len(month) < checkpoint:
         return None
     return month.iloc[checkpoint - 1]["date"]
@@ -46,27 +42,11 @@ def _residual_stats(pairs):
     return float(np.quantile(residuals, 0.10)), float(np.quantile(residuals, 0.90)), len(residuals)
 
 
-def rolling_backtest(
-    monthly_history: pd.DataFrame,
-    group_cols: list,
-    min_train_months: int = 24,
-    daily_history: pd.DataFrame | None = None,
-    calendar: pd.DataFrame | None = None,
-    checkpoints: list[int] | None = None,
-) -> pd.DataFrame:
-    """Evaluate candidate models at working-day checkpoints.
-
-    ETS/SARIMA use only closed months before each target month. The baseline
-    uses target-month Sell-In only through the requested checkpoint. XGBoost
-    is evaluated separately with a freshly fitted pre-target model.
-
-    Residual quantiles are retained from these out-of-sample predictions so
-    production P10/P90 intervals can be calibrated without using future data.
-    """
+def rolling_backtest(monthly_history, group_cols, min_train_months=24, daily_history=None, calendar=None, checkpoints=None):
+    """Evaluate candidate models at WD checkpoints with residual calibration."""
     checkpoints = checkpoints or [4, 7, 10, 15, 20]
     if daily_history is None or calendar is None:
         raise ValueError("V2 backtest requires daily_history and calendar for WD checkpoints.")
-
     required = set(group_cols + ["periode", "monthly_value"])
     if not required.issubset(monthly_history.columns):
         raise ValueError(f"monthly_history missing columns: {required - set(monthly_history.columns)}")
@@ -91,46 +71,26 @@ def rolling_backtest(
             train = g[g["periode"] < target_month]
             if len(train) < min_train_months:
                 continue
-
             actual = g.loc[g["periode"] == target_month, "monthly_value"].sum()
-            target_daily = daily[
-                (daily["periode"] == target_month)
-                & daily[group_cols].eq(pd.Series(key_vals, index=group_cols)).all(axis=1)
-            ]
+            target_daily = daily[(daily["periode"] == target_month) & daily[group_cols].eq(pd.Series(key_vals, index=group_cols)).all(axis=1)]
             if target_daily.empty:
                 continue
-
             series = train["monthly_value"].astype(float)
-            ts_preds = {
-                "ets": _safe_forecast(forecast_ets, series),
-                "sarima": _safe_forecast(forecast_sarima, series),
-            }
+            ts_preds = {"ets": _safe_forecast(forecast_ets, series), "sarima": _safe_forecast(forecast_sarima, series)}
 
             for checkpoint in checkpoints:
                 cp_date = _checkpoint_date(calendar, target_month, checkpoint)
                 if cp_date is None:
                     continue
-                elapsed = int(calendar.loc[
-                    (calendar["date"] >= target_month) & (calendar["date"] <= cp_date),
-                    "is_working_day",
-                ].astype(bool).sum())
-                total = int(calendar.loc[
-                    (calendar["date"] >= target_month)
-                    & (calendar["date"] < target_month + pd.offsets.MonthBegin(1)),
-                    "is_working_day",
-                ].astype(bool).sum())
+                elapsed = int(calendar.loc[(calendar["date"] >= target_month) & (calendar["date"] <= cp_date), "is_working_day"].astype(bool).sum())
+                total = int(calendar.loc[(calendar["date"] >= target_month) & (calendar["date"] < target_month + pd.offsets.MonthBegin(1)), "is_working_day"].astype(bool).sum())
                 mtd = target_daily.loc[target_daily["invoice_date"] <= cp_date, "sellin_value"].sum()
-                preds = {
-                    "baseline": forecast_from_mtd(float(mtd), elapsed, total),
-                    "ets": ts_preds["ets"],
-                    "sarima": ts_preds["sarima"],
-                }
+                preds = {"baseline": forecast_from_mtd(float(mtd), elapsed, total), "ets": ts_preds["ets"], "sarima": ts_preds["sarima"]}
                 for model, pred in preds.items():
-                    if pred is None or not np.isfinite(float(pred)):
-                        continue
-                    pair = (float(actual), float(pred))
-                    observations[model].append(pair)
-                    checkpoint_values[model][checkpoint].append(pair)
+                    if pred is not None and np.isfinite(float(pred)):
+                        pair = (float(actual), float(pred))
+                        observations[model].append(pair)
+                        checkpoint_values[model][checkpoint].append(pair)
 
         row = dict(key_dict)
         for model, pairs in observations.items():
@@ -140,38 +100,23 @@ def rolling_backtest(
                 row[f"{model}_observations"] = 0
                 row[f"{model}_residual_q10"] = np.nan
                 row[f"{model}_residual_q90"] = np.nan
-                continue
-            y_true, y_pred = zip(*pairs)
-            row.update({
-                f"{model}_wape": wape(y_true, y_pred),
-                f"{model}_mae": mae(y_true, y_pred),
-                f"{model}_rmse": rmse(y_true, y_pred),
-                f"{model}_bias": bias(y_true, y_pred),
-                f"{model}_bias_pct": bias_pct(y_true, y_pred),
-                f"{model}_observations": len(pairs),
-            })
-            q10, q90, _ = _residual_stats(pairs)
-            row[f"{model}_residual_q10"] = q10
-            row[f"{model}_residual_q90"] = q90
+            else:
+                y_true, y_pred = zip(*pairs)
+                row.update({f"{model}_wape": wape(y_true, y_pred), f"{model}_mae": mae(y_true, y_pred), f"{model}_rmse": rmse(y_true, y_pred), f"{model}_bias": bias(y_true, y_pred), f"{model}_bias_pct": bias_pct(y_true, y_pred), f"{model}_observations": len(pairs)})
+                q10, q90, _ = _residual_stats(pairs)
+                row[f"{model}_residual_q10"] = q10
+                row[f"{model}_residual_q90"] = q90
             for checkpoint in checkpoints:
                 cp_pairs = checkpoint_values[model][checkpoint]
-                row[f"{model}_wd{checkpoint}_wape"] = (
-                    wape(*zip(*cp_pairs)) if cp_pairs else np.nan
-                )
-
+                row[f"{model}_wd{checkpoint}_wape"] = wape(*zip(*cp_pairs)) if cp_pairs else np.nan
+                q10, q90, count = _residual_stats(cp_pairs)
+                row[f"{model}_wd{checkpoint}_residual_q10"] = q10
+                row[f"{model}_wd{checkpoint}_residual_q90"] = q90
+                row[f"{model}_wd{checkpoint}_residual_observations"] = count
         rows.append(row)
 
     base_results = pd.DataFrame(rows)
-    xgb_results = rolling_xgb_checkpoint_backtest(
-        monthly_history=monthly,
-        daily_history=daily,
-        calendar=calendar,
-        group_cols=group_cols,
-        checkpoints=checkpoints,
-        min_train_months=min_train_months,
-    )
+    xgb_results = rolling_xgb_checkpoint_backtest(monthly_history=monthly, daily_history=daily, calendar=calendar, group_cols=group_cols, checkpoints=checkpoints, min_train_months=min_train_months)
     if base_results.empty:
         return xgb_results
-
-    result = base_results.merge(xgb_results, on=group_cols, how="left")
-    return result
+    return base_results.merge(xgb_results, on=group_cols, how="left")
