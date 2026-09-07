@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from backtest.metrics import bias, bias_pct, mae, rmse, wape
+from config import FORECAST_CONFIG
 from models.xgboost_model import train_xgboost_checkpoint, predict_xgboost
 
 logger = logging.getLogger(__name__)
@@ -35,7 +36,7 @@ def _residual_stats(pairs):
 
 
 def _history_features(monthly, group_cols, target_month, key):
-    history = monthly[(monthly["periode"] < target_month)]
+    history = monthly[monthly["periode"] < target_month]
     g = history
     for col, value in zip(group_cols, key):
         g = g[g[col] == value]
@@ -116,12 +117,11 @@ def _checkpoint_row(monthly, daily, calendar, targets, group_cols, target_month,
             "avg_daily_rate": mtd_value / max(elapsed_wd, 1),
             "run_rate_forecast": mtd_value / max(elapsed_wd, 1) * total_wd,
             "target_sellin": target_value,
-            "mtd_target_pct": mtd_value / target_value * 100.0 if target_value not in (0, np.nan) and np.isfinite(target_value) else np.nan,
+            "mtd_target_pct": mtd_value / target_value * 100.0 if pd.notna(target_value) and np.isfinite(target_value) and target_value != 0 else np.nan,
             "checkpoint": checkpoint,
         }
     )
-    actual = g
-    actual = monthly[(monthly["periode"] == target_month)]
+    actual = monthly[monthly["periode"] == target_month]
     for col, value in zip(group_cols, key):
         actual = actual[actual[col] == value]
     row["actual"] = float(actual["monthly_value"].iloc[0]) if not actual.empty else np.nan
@@ -140,6 +140,11 @@ def _build_training_frame(monthly, daily, calendar, targets, group_cols, target_
                 historical_target, checkpoint, _as_key(key), min_train_months
             )
             if row is not None and pd.notna(row.get("actual")):
+                # The checkpoint snapshot is the feature vector; `actual` is
+                # the EOM label. Keep the two contracts explicit so the model
+                # cannot accidentally train against a nonexistent
+                # `monthly_value` column in this snapshot frame.
+                row["monthly_value"] = row["actual"]
                 rows.append(row)
     return pd.DataFrame(rows)
 
@@ -175,7 +180,7 @@ def rolling_xgb_checkpoint_backtest(monthly_history, daily_history, calendar, gr
             if train_frame.empty or len(train_frame) < min_train_months:
                 continue
             try:
-                model = train_xgboost_checkpoint(train_frame)
+                model = train_xgboost_checkpoint(train_frame, target_col="monthly_value")
             except (ValueError, TypeError) as exc:
                 logger.debug("Checkpoint XGBoost unavailable for %s WD%s: %s", target_month, cp, exc)
                 continue
