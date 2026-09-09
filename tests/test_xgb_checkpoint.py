@@ -1,6 +1,10 @@
 import pandas as pd
 
-from backtest.xgb_checkpoint import _build_training_frame, _checkpoint_row
+from backtest.xgb_checkpoint import (
+    _build_all_checkpoint_training_frames,
+    _build_training_frame,
+    _checkpoint_row,
+)
 
 
 def _fixtures():
@@ -88,3 +92,19 @@ def test_checkpoint_training_frame_excludes_scored_target_month():
     assert not frame.empty
     assert frame["periode"].max() < pd.Timestamp("2026-03-01")
     assert (frame["checkpoint"] == 4).all()
+
+
+def test_prebuilt_checkpoint_frames_match_full_history_contract():
+    monthly, daily, calendar, targets = _fixtures()
+    checkpoints = [4, 7]
+    frames = _build_all_checkpoint_training_frames(
+        monthly, daily, calendar, targets, ["regioncode"], checkpoints, 24,
+    )
+    end = monthly["periode"].max() + pd.offsets.MonthBegin(1)
+    for checkpoint in checkpoints:
+        expected = _build_training_frame(
+            monthly, daily, calendar, targets, ["regioncode"],
+            end, checkpoint, 24,
+        ).sort_values(["periode", "regioncode"]).reset_index(drop=True)
+        actual = frames[checkpoint].sort_values(["periode", "regioncode"]).reset_index(drop=True)
+        pd.testing.assert_frame_equal(actual, expected)
