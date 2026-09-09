@@ -6,24 +6,27 @@ from db import read_sql
 
 
 def get_daily_sellin(history_months: int = 36) -> pd.DataFrame:
-    """Return daily Sell-In aggregated at region grain.
+    """Return daily Sell-In aggregated at the authoritative region grain.
 
-    The extraction deliberately contains no branch dimension join.  Region is
-    the locked V2 forecast grain, and avoiding an intermediate branch mapping
-    removes a major source of double counting and mapping leakage.
+    Region is derived from the production mapping used by the business view:
+    sellinascend."Customer Area" -> vt_sr_per_rsmasw.kota -> regioncode.
+    The mapping has been validated to be one-to-one for non-null regioncode
+    rows, so the join does not duplicate Sell-In values.
     """
     months = max(int(history_months), 1)
     sql = f"""
         SELECT
-            f.{SOURCE['region_col']} AS regioncode,
+            m.{SOURCE['mapping_region_col']} AS regioncode,
             f.{SOURCE['invoice_date_col']}::date AS invoice_date,
             SUM(f.{SOURCE['value_col']})::numeric AS sellin_value
         FROM {SOURCE['fact_table']} f
+        JOIN {SOURCE['region_mapping_table']} m
+          ON f.{SOURCE['mapping_fact_key_col']} = m.{SOURCE['mapping_key_col']}
         WHERE f.{SOURCE['invoice_date_col']} >=
               date_trunc('month', CURRENT_DATE) - INTERVAL '{months - 1} months'
           AND f.{SOURCE['invoice_date_col']} <
               date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'
-          AND f.{SOURCE['region_col']} IS NOT NULL
+          AND m.{SOURCE['mapping_region_col']} IS NOT NULL
         GROUP BY 1, 2
         ORDER BY 2, 1
     """
