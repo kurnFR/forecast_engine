@@ -140,13 +140,31 @@ def _build_training_frame(monthly, daily, calendar, targets, group_cols, target_
                 historical_target, checkpoint, _as_key(key), min_train_months
             )
             if row is not None and pd.notna(row.get("actual")):
-                # The checkpoint snapshot is the feature vector; `actual` is
-                # the EOM label. Keep the two contracts explicit so the model
-                # cannot accidentally train against a nonexistent
-                # `monthly_value` column in this snapshot frame.
                 row["monthly_value"] = row["actual"]
                 rows.append(row)
     return pd.DataFrame(rows)
+
+
+def _build_all_checkpoint_training_frames(monthly, daily, calendar, targets, group_cols, checkpoints, min_train_months):
+    """Build each checkpoint snapshot once, avoiding repeated historical scans.
+
+    The rolling backtest needs the same historical checkpoint examples many
+    times. Materializing them once per checkpoint preserves the leakage rule
+    while removing the expensive nested target-month/dataframe filtering that
+    previously made the backtest unnecessarily slow.
+    """
+    if monthly.empty:
+        return {int(cp): pd.DataFrame() for cp in checkpoints}
+
+    last_target = monthly["periode"].max()
+    snapshot_end = last_target + pd.offsets.MonthBegin(1)
+    return {
+        int(cp): _build_training_frame(
+            monthly, daily, calendar, targets, group_cols,
+            snapshot_end, int(cp), min_train_months
+        )
+        for cp in checkpoints
+    }
 
 
 def rolling_xgb_checkpoint_backtest(monthly_history, daily_history, calendar, group_cols, checkpoints, min_train_months=24, targets=None):
@@ -167,16 +185,18 @@ def rolling_xgb_checkpoint_backtest(monthly_history, daily_history, calendar, gr
         _as_key(key): {cp: [] for cp in checkpoints}
         for key in monthly[group_cols].drop_duplicates().itertuples(index=False, name=None)
     }
+    checkpoint_frames = _build_all_checkpoint_training_frames(
+        monthly, daily, calendar, targets, group_cols, checkpoints, min_train_months
+    )
 
     for target_month in sorted(monthly["periode"].drop_duplicates()):
         for cp in checkpoints:
             checkpoint_date = _checkpoint_date(calendar, target_month, cp)
             if checkpoint_date is None:
                 continue
-            train_frame = _build_training_frame(
-                monthly, daily, calendar, targets, group_cols,
-                target_month, cp, min_train_months
-            )
+            train_frame = checkpoint_frames[int(cp)]
+            if not train_frame.empty:
+                train_frame = train_frame[train_frame["periode"] < target_month]
             if train_frame.empty or len(train_frame) < min_train_months:
                 continue
             try:
