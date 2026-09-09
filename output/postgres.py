@@ -33,10 +33,50 @@ CREATE TABLE IF NOT EXISTS {TABLE} (
 );
 """
 
+NUMERIC_COLS = (
+    "mtd_value",
+    "forecast_baseline",
+    "forecast_ets",
+    "forecast_sarima",
+    "forecast_xgboost",
+    "forecast_p10",
+    "forecast_p50",
+    "forecast_p90",
+    "target_sellin",
+    "achievement_pct_forecast",
+)
+INT_COLS = (
+    "elapsed_working_days",
+    "remaining_working_days",
+    "total_working_days",
+)
+
 
 def ensure_table() -> None:
     with get_engine().begin() as conn:
         conn.execute(text(DDL))
+
+
+def _normalize_for_postgres(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize model output before staging so numeric columns stay numeric.
+
+    Model fallbacks can return None/NaN or numeric-looking object values. If an
+    object column is sent directly to pandas ``to_sql``, SQLAlchemy may infer a
+    TEXT staging column, which then fails against the numeric production table.
+    """
+    out = df.copy()
+    if "periode" in out.columns:
+        out["periode"] = pd.to_datetime(out["periode"], errors="coerce").dt.date
+    if "generated_at" in out.columns:
+        out["generated_at"] = pd.to_datetime(out["generated_at"], errors="coerce")
+
+    for col in NUMERIC_COLS:
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce")
+    for col in INT_COLS:
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce").astype("Int64")
+    return out
 
 
 def write_forecast(df: pd.DataFrame) -> None:
@@ -45,6 +85,7 @@ def write_forecast(df: pd.DataFrame) -> None:
         return
 
     ensure_table()
+    df = _normalize_for_postgres(df)
     staging_name = f"{NAME}_staging"
     df.to_sql(staging_name, get_engine(), schema=SCHEMA, if_exists="replace", index=False)
 
