@@ -28,6 +28,10 @@ SOURCE = {
     "fact_table": os.getenv("FORECAST_FACT_TABLE", "dwh_prod.sellinascend"),
     "date_dim": os.getenv("FORECAST_DATE_DIM", "dwh_prod.dimdate"),
     "region_target_view": os.getenv("FORECAST_TARGET_TABLE", "dwh_prod.mv_ai_region_monthly"),
+    "region_mapping_table": os.getenv("FORECAST_REGION_MAPPING_TABLE", "dwh_prod.vt_sr_per_rsmasw"),
+    "mapping_fact_key_col": os.getenv("FORECAST_MAPPING_FACT_KEY_COL", '"Customer Area"'),
+    "mapping_key_col": os.getenv("FORECAST_MAPPING_KEY_COL", "kota"),
+    "mapping_region_col": os.getenv("FORECAST_MAPPING_REGION_COL", "regioncode"),
     "value_col": '"Line Total After Tax (Local)"',
     "invoice_date_col": "invoicedate",
     "region_col": "regioncode",
@@ -45,8 +49,6 @@ FORECAST_CONFIG = {
     "forecast_horizon_months": 1,
 }
 
-# Single source of truth for candidate model names used by backtest,
-# selection and ensemble layers.
 CANDIDATE_MODELS = ("baseline", "ets", "sarima", "xgboost")
 
 MODEL_CONFIG = {
