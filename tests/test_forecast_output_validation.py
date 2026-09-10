@@ -18,7 +18,7 @@ def _valid_output():
                 "forecast_p50": 21_666_482_120.10,
                 "forecast_p90": 25_916_951_052.19,
                 "target_sellin": 24_700_000_000,
-                "achievement_pct_forecast": 87.7185519032,
+                "achievement_pct_forecast": 87.71855109352227,
             }
         ]
     )
