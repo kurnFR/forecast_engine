@@ -16,11 +16,23 @@ GROUP_COLS = FORECAST_CONFIG["grain"]
 
 
 def _next_month_xgb_features(hist_features, current_features, calendar, targets, current_month):
-    """Construct current-month checkpoint features using MTD plus closed history."""
-    closed = hist_features[hist_features["periode"] < current_month].copy()
+    """Construct current-month checkpoint features using MTD plus closed history.
+
+    The historical feature row for ``current_month`` is already leakage-safe:
+    build_historical_features() creates its lag/rolling/seasonal features from
+    months strictly before the current month. Using the latest *closed* row
+    instead would shift every lag back by one month (for example, lag_1 would
+    become two-months-ago), producing the wrong XGBoost input.
+    """
     current = current_features.copy()
     target = targets[targets["periode"] == current_month][GROUP_COLS + ["target_sellin"]].drop_duplicates()
-    base = closed.sort_values("periode").groupby(GROUP_COLS, as_index=False).tail(1).copy()
+
+    # IMPORTANT: use the current-month historical-feature row. Its features
+    # are generated with shift/rolling operations, so the current target is
+    # not included and leakage is avoided.
+    base = hist_features[hist_features["periode"] == current_month].copy()
+    base = base.sort_values("periode").drop_duplicates(GROUP_COLS, keep="last")
+
     base = base.merge(current[GROUP_COLS + [
         "mtd_value", "elapsed_working_days", "remaining_working_days",
         "total_working_days", "avg_daily_rate", "run_rate_forecast",
@@ -76,6 +88,11 @@ def run_prediction_pipeline(trained):
             feature_row = row.copy()
             feature_row["checkpoint"] = checkpoint
         pred = predict_xgboost(model, pd.DataFrame([feature_row]))
+        if pred is None:
+            logger.warning(
+                "XGBoost prediction unavailable for %s at WD%s; required feature values are missing.",
+                row.get(GROUP_COLS[0]), checkpoint,
+            )
         xgb_rows.append({
             **{c: row[c] for c in GROUP_COLS},
             "forecast_xgboost": pred,
