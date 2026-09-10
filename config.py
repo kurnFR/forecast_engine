@@ -47,6 +47,9 @@ FORECAST_CONFIG = {
     "backtest_checkpoints": [4, 7, 10, 15, 20],
     "backtest_min_train_months": 24,
     "forecast_horizon_months": 1,
+    # Practical uncertainty calibration: widen OOS residual-derived bounds
+    # modestly rather than optimizing coverage to a small historical sample.
+    "interval_residual_scale": 1.25,
 }
 
 CANDIDATE_MODELS = ("baseline", "ets", "sarima", "xgboost")
