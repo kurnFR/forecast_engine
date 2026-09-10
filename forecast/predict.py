@@ -5,6 +5,7 @@ import pandas as pd
 
 from config import FORECAST_CONFIG
 from features.current_month import build_current_month_features
+from features.working_day import month_working_day_stats
 from models.baseline import forecast_baseline
 from models.ensemble import build_ensemble
 from models.ets import forecast_ets
@@ -33,6 +34,28 @@ def _next_month_xgb_features(hist_features, current_features, calendar, targets,
         "total_working_days", "avg_daily_rate", "run_rate_forecast",
     ]], on=GROUP_COLS, how="left", validate="one_to_one")
     base = base.merge(target, on=GROUP_COLS, how="left", validate="one_to_one")
+
+    # The working-day calendar is a month-level feature, not a region-level
+    # feature.  Re-derive it directly from the authoritative calendar here so
+    # an incomplete/partially populated current_features frame can never make
+    # XGBoost lose total_working_days for every region.
+    wd = month_working_day_stats(calendar, pd.Timestamp(current_month))
+    base["total_working_days"] = pd.to_numeric(
+        base["total_working_days"], errors="coerce"
+    ).fillna(float(wd["total_working_days"]))
+    base["elapsed_working_days"] = pd.to_numeric(
+        base["elapsed_working_days"], errors="coerce"
+    ).fillna(float(wd["elapsed_working_days"]))
+    base["remaining_working_days"] = pd.to_numeric(
+        base["remaining_working_days"], errors="coerce"
+    ).fillna(float(wd["remaining_working_days"]))
+
+    if base["total_working_days"].isna().any() or (base["total_working_days"] <= 0).any():
+        raise ValueError(
+            f"Invalid total_working_days for {current_month:%Y-%m}; "
+            "cannot build XGBoost prediction features."
+        )
+
     base["mtd_target_pct"] = base["mtd_value"] / base["target_sellin"].replace(0, np.nan) * 100.0
     base["checkpoint"] = base["elapsed_working_days"].astype(int)
     base["periode"] = current_month
