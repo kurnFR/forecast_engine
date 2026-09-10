@@ -32,7 +32,6 @@ def _safe_forecast(fn, series):
 
 
 def _residual_stats(pairs):
-    """Return robust out-of-sample residual quantiles for interval calibration."""
     if not pairs:
         return np.nan, np.nan, 0
     residuals = np.asarray([actual - pred for actual, pred in pairs], dtype=float)
@@ -46,7 +45,8 @@ def rolling_backtest(monthly_history, group_cols, min_train_months=24, daily_his
     """Evaluate candidate models at WD checkpoints with residual calibration.
 
     When return_predictions=True, also return leakage-safe OOS prediction pairs
-    keyed by group and checkpoint for ensemble auditing.
+    keyed by group and checkpoint. Returned audit pairs include target month,
+    actual and prediction so models can be aligned exactly.
     """
     checkpoints = checkpoints or [4, 7, 10, 15, 20]
     if daily_history is None or calendar is None:
@@ -101,7 +101,7 @@ def rolling_backtest(monthly_history, group_cols, min_train_months=24, daily_his
                         pair = (float(actual), float(pred))
                         observations[model].append(pair)
                         checkpoint_values[model][checkpoint].append(pair)
-                        base_pair_store[key_tuple][model][checkpoint].append(pair)
+                        base_pair_store[key_tuple][model][checkpoint].append((pd.Timestamp(target_month), float(actual), float(pred)))
 
         row = dict(key_dict)
         for model, pairs in observations.items():
