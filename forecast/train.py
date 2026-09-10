@@ -22,6 +22,49 @@ from config import FORECAST_CONFIG
 
 logger = logging.getLogger(__name__)
 GROUP_COLS = FORECAST_CONFIG["grain"]
+CANDIDATE_MODELS = ("baseline", "ets", "sarima", "xgboost")
+
+
+def _log_backtest_quality(backtest_results: pd.DataFrame, best_models: pd.DataFrame) -> None:
+    """Log an auditable model-quality summary without changing forecasts.
+
+    The production forecast is selected from checkpoint WAPE, while the
+    additional WAPE/bias diagnostics make it possible to spot unstable or
+    systematically biased candidates before tuning the models further.
+    """
+    if backtest_results.empty:
+        logger.warning("Backtest quality audit skipped: no backtest results.")
+        return
+
+    logger.info("=== Backtest quality audit ===")
+    for _, row in backtest_results.iterrows():
+        key = ", ".join(f"{col}={row[col]}" for col in GROUP_COLS)
+        selected = "unknown"
+        selected_score = None
+        if not best_models.empty:
+            match = best_models
+            for col in GROUP_COLS:
+                match = match[match[col] == row[col]]
+            if not match.empty:
+                selected = str(match.iloc[0].get("best_model", "unknown"))
+                selected_score = match.iloc[0].get("best_model_score")
+
+        parts = []
+        for model in CANDIDATE_MODELS:
+            wape_value = row.get(f"{model}_checkpoint_score")
+            bias_value = row.get(f"{model}_bias_pct")
+            observations = row.get(f"{model}_observations")
+            if pd.notna(wape_value):
+                bias_text = f"bias={float(bias_value):.2f}%" if pd.notna(bias_value) else "bias=NA"
+                obs_text = f"n={int(observations)}" if pd.notna(observations) else "n=NA"
+                parts.append(f"{model}: WAPE={float(wape_value):.2f}%, {bias_text}, {obs_text}")
+
+        selected_text = (
+            f"{selected} (score={float(selected_score):.2f}%)"
+            if selected_score is not None and pd.notna(selected_score)
+            else selected
+        )
+        logger.info("%s | selected=%s | %s", key, selected_text, " | ".join(parts))
 
 
 def run_training_pipeline() -> dict:
@@ -70,6 +113,7 @@ def run_training_pipeline() -> dict:
         targets=targets,
     )
     best_models = select_best_model(backtest_results, GROUP_COLS)
+    _log_backtest_quality(backtest_results, best_models)
 
     logger.info("Running strict leakage-safe P10/P50/P90 interval backtest...")
     interval_backtest_results = rolling_interval_backtest(
