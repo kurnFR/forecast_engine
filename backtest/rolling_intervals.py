@@ -12,7 +12,7 @@ from backtest.xgb_checkpoint import (
     _build_training_frame,
     _checkpoint_row,
 )
-from config import CANDIDATE_MODELS
+from config import CANDIDATE_MODELS, FORECAST_CONFIG
 from models.baseline import forecast_from_mtd
 from models.ets import forecast_ets
 from models.sarima import forecast_sarima
@@ -59,11 +59,16 @@ def _prior_weights(rows: pd.DataFrame) -> dict:
 
 
 def _ensemble_with_prior_calibration(target_row: pd.Series, prior_rows: pd.DataFrame, checkpoint: int):
-    """Build P10/P50/P90 using calibration rows strictly before the target."""
+    """Build P10/P50/P90 using prior OOS residuals only.
+
+    The residual quantiles are deliberately widened by a small configurable
+    factor. This is a practical calibration guard against under-covering
+    intervals without tuning directly to the target-month actuals.
+    """
     del checkpoint
     if prior_rows is None or prior_rows.empty:
         available = {
-            model: float(target_row[f"forecast_{model}"])
+            model: float(target_row[f"forecast_{model"]])
             for model in CANDIDATE_MODELS
             if pd.notna(target_row.get(f"forecast_{model}"))
         }
@@ -100,8 +105,13 @@ def _ensemble_with_prior_calibration(target_row: pd.Series, prior_rows: pd.DataF
         return np.nan, p50, np.nan
     weights_arr = np.asarray(used, dtype=float)
     weights_arr /= weights_arr.sum()
-    p10 = max(p50 + float(np.dot(weights_arr, lower)), 0.0)
-    p90 = max(p50 + float(np.dot(weights_arr, upper)), 0.0)
+    residual_scale = float(FORECAST_CONFIG.get("interval_residual_scale", 1.0))
+    if not np.isfinite(residual_scale) or residual_scale < 1.0:
+        raise ValueError("interval_residual_scale must be finite and >= 1.0")
+    lower_residual = float(np.dot(weights_arr, lower)) * residual_scale
+    upper_residual = float(np.dot(weights_arr, upper)) * residual_scale
+    p10 = max(p50 + lower_residual, 0.0)
+    p90 = max(p50 + upper_residual, 0.0)
     return (min(p10, p90), p50, max(p10, p90))
 
 
@@ -137,11 +147,8 @@ def build_oos_checkpoint_predictions(monthly_history, daily_history, calendar, g
     daily["periode"] = daily["invoice_date"].dt.to_period("M").dt.to_timestamp()
     calendar = calendar.copy()
     calendar["date"] = pd.to_datetime(calendar["date"])
-    if targets is None:
-        targets = pd.DataFrame(columns=["periode", *group_cols, "target_sellin"])
-    else:
-        targets = targets.copy()
-        targets["periode"] = pd.to_datetime(targets["periode"])
+    targets = targets.copy() if targets is not None else pd.DataFrame(columns=["periode", *group_cols, "target_sellin"])
+    targets["periode"] = pd.to_datetime(targets["periode"])
     rows = []
 
     for key, group in monthly.groupby(group_cols):
