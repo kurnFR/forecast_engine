@@ -26,12 +26,7 @@ CANDIDATE_MODELS = ("baseline", "ets", "sarima", "xgboost")
 
 
 def _log_backtest_quality(backtest_results: pd.DataFrame, best_models: pd.DataFrame) -> None:
-    """Log an auditable model-quality summary without changing forecasts.
-
-    The production forecast is selected from checkpoint WAPE, while the
-    additional WAPE/bias diagnostics make it possible to spot unstable or
-    systematically biased candidates before tuning the models further.
-    """
+    """Log an auditable model-quality summary without changing forecasts."""
     if backtest_results.empty:
         logger.warning("Backtest quality audit skipped: no backtest results.")
         return
@@ -41,23 +36,32 @@ def _log_backtest_quality(backtest_results: pd.DataFrame, best_models: pd.DataFr
         key = ", ".join(f"{col}={row[col]}" for col in GROUP_COLS)
         selected = "unknown"
         selected_score = None
+        selection = pd.DataFrame()
         if not best_models.empty:
-            match = best_models
+            selection = best_models
             for col in GROUP_COLS:
-                match = match[match[col] == row[col]]
-            if not match.empty:
-                selected = str(match.iloc[0].get("best_model", "unknown"))
-                selected_score = match.iloc[0].get("best_model_score")
+                selection = selection[selection[col] == row[col]]
+            if not selection.empty:
+                selected = str(selection.iloc[0].get("best_model", "unknown"))
+                selected_score = selection.iloc[0].get("best_model_score")
 
         parts = []
         for model in CANDIDATE_MODELS:
-            wape_value = row.get(f"{model}_checkpoint_score")
+            # checkpoint_score is produced by model_selection.py, not by the
+            # raw rolling backtest dataframe. Read it from the matching
+            # best_models row so the audit reports the same scores used for
+            # production selection.
+            score = None
+            if not selection.empty:
+                score = selection.iloc[0].get(f"{model}_checkpoint_score")
             bias_value = row.get(f"{model}_bias_pct")
             observations = row.get(f"{model}_observations")
-            if pd.notna(wape_value):
+            if pd.notna(score):
                 bias_text = f"bias={float(bias_value):.2f}%" if pd.notna(bias_value) else "bias=NA"
                 obs_text = f"n={int(observations)}" if pd.notna(observations) else "n=NA"
-                parts.append(f"{model}: WAPE={float(wape_value):.2f}%, {bias_text}, {obs_text}")
+                parts.append(f"{model}: WAPE={float(score):.2f}%, {bias_text}, {obs_text}")
+            else:
+                parts.append(f"{model}: WAPE=NA, bias={'%.2f%%' % float(bias_value) if pd.notna(bias_value) else 'NA'}, n={int(observations) if pd.notna(observations) else 'NA'}")
 
         selected_text = (
             f"{selected} (score={float(selected_score):.2f}%)"
