@@ -131,3 +131,124 @@ def _checkpoint_xgb_prediction(monthly, daily, calendar, targets, group_cols, ta
     except (ValueError, TypeError) as exc:
         logger.debug("Checkpoint XGBoost unavailable for %s WD%s: %s", target_month, checkpoint, exc)
         return None
+
+
+def build_oos_checkpoint_predictions(monthly_history, daily_history, calendar, group_cols, checkpoints, min_train_months=24, targets=None):
+    """Build raw candidate OOS predictions at each target/checkpoint."""
+    monthly = monthly_history.copy()
+    monthly["periode"] = pd.to_datetime(monthly["periode"])
+    daily = daily_history.copy()
+    daily["invoice_date"] = pd.to_datetime(daily["invoice_date"])
+    daily["periode"] = daily["invoice_date"].dt.to_period("M").dt.to_timestamp()
+    calendar = calendar.copy()
+    calendar["date"] = pd.to_datetime(calendar["date"])
+    if targets is None:
+        targets = pd.DataFrame(columns=["periode", *group_cols, "target_sellin"])
+    else:
+        targets = targets.copy()
+        targets["periode"] = pd.to_datetime(targets["periode"])
+    rows = []
+
+    for key, group in monthly.groupby(group_cols):
+        key_vals = _as_key(key)
+        key_dict = dict(zip(group_cols, key_vals))
+        g = group.sort_values("periode").reset_index(drop=True)
+        for target_month in g["periode"].drop_duplicates().sort_values():
+            train = g[g["periode"] < target_month]
+            if len(train) < min_train_months:
+                continue
+            target_daily = daily[daily["periode"] == target_month]
+            for col, value in key_dict.items():
+                target_daily = target_daily[target_daily[col] == value]
+            if target_daily.empty:
+                continue
+
+            actual = float(g.loc[g["periode"] == target_month, "monthly_value"].sum())
+            series = train["monthly_value"].astype(float)
+            ts_preds = {
+                "ets": _safe_forecast(forecast_ets, series),
+                "sarima": _safe_forecast(forecast_sarima, series),
+            }
+            month_mask = (
+                (calendar["date"] >= target_month)
+                & (calendar["date"] < target_month + pd.offsets.MonthBegin(1))
+            )
+            total = int(calendar.loc[month_mask, "is_working_day"].astype(bool).sum())
+
+            for checkpoint in checkpoints:
+                cp_date = _checkpoint_date(calendar, target_month, checkpoint)
+                if cp_date is None:
+                    continue
+                elapsed = int(
+                    calendar.loc[
+                        month_mask & (calendar["date"] <= cp_date), "is_working_day"
+                    ].astype(bool).sum()
+                )
+                mtd = float(
+                    target_daily.loc[
+                        target_daily["invoice_date"] <= cp_date, "sellin_value"
+                    ].sum()
+                )
+                xgb_pred = _checkpoint_xgb_prediction(
+                    monthly, daily, calendar, targets, group_cols,
+                    target_month, checkpoint, min_train_months, key_vals,
+                )
+                preds = {
+                    "baseline": forecast_from_mtd(mtd, elapsed, total),
+                    "ets": ts_preds["ets"],
+                    "sarima": ts_preds["sarima"],
+                    "xgboost": xgb_pred,
+                }
+                row = dict(key_dict)
+                row.update({"periode": target_month, "checkpoint": checkpoint, "actual": actual})
+                for model in CANDIDATE_MODELS:
+                    value = preds.get(model)
+                    row[f"forecast_{model}"] = (
+                        float(value) if value is not None and np.isfinite(float(value)) else np.nan
+                    )
+                rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def rolling_interval_backtest(monthly_history, daily_history, calendar, group_cols, checkpoints, min_train_months=24, targets=None):
+    """Evaluate intervals with target-month calibration restricted to prior months."""
+    raw = build_oos_checkpoint_predictions(
+        monthly_history, daily_history, calendar, group_cols, checkpoints,
+        min_train_months, targets,
+    )
+    if raw.empty:
+        return pd.DataFrame()
+
+    scored = []
+    for key, target in raw.groupby(group_cols + ["periode", "checkpoint"], dropna=False):
+        key_vals = _as_key(key)
+        target_month = key_vals[len(group_cols)]
+        checkpoint = int(key_vals[len(group_cols) + 1])
+        prior = raw[(raw["periode"] < target_month) & (raw["checkpoint"] == checkpoint)]
+        for col, value in zip(group_cols, key_vals[:len(group_cols)]):
+            prior = prior[prior[col] == value]
+        p10, p50, p90 = _ensemble_with_prior_calibration(target.iloc[0], prior, checkpoint)
+        row = {col: value for col, value in zip(group_cols, key_vals[:len(group_cols)])}
+        row.update({
+            "periode": target_month,
+            "checkpoint": checkpoint,
+            "actual": float(target.iloc[0]["actual"]),
+            "forecast_p10": p10,
+            "forecast_p50": p50,
+            "forecast_p90": p90,
+            "calibration_observations": int(len(prior)),
+            "calibration_cutoff": target_month,
+        })
+        scored.append(row)
+
+    result = pd.DataFrame(scored)
+    if result.empty:
+        return result
+    result = result[result["forecast_p10"].notna() & result["forecast_p90"].notna()].copy()
+    if result.empty:
+        return result
+    result["interval_width"] = result["forecast_p90"] - result["forecast_p10"]
+    result["interval_width_pct_actual"] = (
+        result["interval_width"] / result["actual"].abs().replace(0, np.nan)
+    )
+    return result
