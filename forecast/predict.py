@@ -29,26 +29,26 @@ def _next_month_xgb_features(hist_features, current_features, calendar, targets,
     base = hist_features[hist_features["periode"] == current_month].copy()
     base = base.sort_values("periode").drop_duplicates(GROUP_COLS, keep="last")
 
-    base = base.merge(current[GROUP_COLS + [
+    current_cols = [
         "mtd_value", "elapsed_working_days", "remaining_working_days",
         "total_working_days", "avg_daily_rate", "run_rate_forecast",
-    ]], on=GROUP_COLS, how="left", validate="one_to_one")
+    ]
+    # Both hist_features and current_features contain total_working_days.
+    # Drop the historical copy before merging so pandas cannot create _x/_y
+    # columns and leave the XGBoost-required name absent.
+    base = base.drop(columns=[c for c in current_cols if c in base.columns], errors="ignore")
+    base = base.merge(
+        current[GROUP_COLS + current_cols],
+        on=GROUP_COLS,
+        how="left",
+        validate="one_to_one",
+    )
     base = base.merge(target, on=GROUP_COLS, how="left", validate="one_to_one")
 
-    # The working-day calendar is a month-level feature, not a region-level
-    # feature.  Re-derive it directly from the authoritative calendar here so
-    # an incomplete/partially populated current_features frame can never make
-    # XGBoost lose total_working_days for every region.
+    # Calendar is authoritative for current-month working-day values.
     wd = month_working_day_stats(calendar, pd.Timestamp(current_month))
-    base["total_working_days"] = pd.to_numeric(
-        base["total_working_days"], errors="coerce"
-    ).fillna(float(wd["total_working_days"]))
-    base["elapsed_working_days"] = pd.to_numeric(
-        base["elapsed_working_days"], errors="coerce"
-    ).fillna(float(wd["elapsed_working_days"]))
-    base["remaining_working_days"] = pd.to_numeric(
-        base["remaining_working_days"], errors="coerce"
-    ).fillna(float(wd["remaining_working_days"]))
+    for col in ("total_working_days", "elapsed_working_days", "remaining_working_days"):
+        base[col] = pd.to_numeric(base[col], errors="coerce").fillna(float(wd[col]))
 
     if base["total_working_days"].isna().any() or (base["total_working_days"] <= 0).any():
         raise ValueError(
