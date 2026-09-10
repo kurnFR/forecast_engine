@@ -7,6 +7,7 @@ Usage:
 import argparse
 import logging
 
+from data.validation import validate_forecast_output
 from forecast.predict import run_prediction_pipeline
 from forecast.train import run_training_pipeline
 from output.postgres import write_forecast
@@ -29,9 +30,10 @@ def main():
 
     logger.info("=== Forecast engine V2: prediction ===")
     result = run_prediction_pipeline(trained)
+    result = validate_forecast_output(result)
 
     month_label = result["periode"].iloc[0].strftime("%Y-%m") if not result.empty else "N/A"
-    logger.info("Generated %d region-month forecasts for %s.", len(result), month_label)
+    logger.info("Generated %d validated region-month forecasts for %s.", len(result), month_label)
 
     if args.dry_run:
         logger.info("=== Dry run: PostgreSQL write skipped ===")
