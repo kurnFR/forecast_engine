@@ -15,6 +15,7 @@ from features.historical import build_historical_features
 from features.working_day import historical_working_days_per_month
 from backtest.rolling import rolling_backtest
 from backtest.rolling_intervals import rolling_interval_backtest
+from backtest.ensemble import audit_ensemble, log_ensemble_audit
 from backtest.xgb_checkpoint import _build_training_frame
 from backtest.model_selection import select_best_model
 from models.xgboost_model import train_xgboost, train_xgboost_checkpoint_models
@@ -30,7 +31,6 @@ def _log_backtest_quality(backtest_results: pd.DataFrame, best_models: pd.DataFr
     if backtest_results.empty:
         logger.warning("Backtest quality audit skipped: no backtest results.")
         return
-
     logger.info("=== Backtest quality audit ===")
     for _, row in backtest_results.iterrows():
         key = ", ".join(f"{col}={row[col]}" for col in GROUP_COLS)
@@ -44,13 +44,8 @@ def _log_backtest_quality(backtest_results: pd.DataFrame, best_models: pd.DataFr
             if not selection.empty:
                 selected = str(selection.iloc[0].get("best_model", "unknown"))
                 selected_score = selection.iloc[0].get("best_model_score")
-
         parts = []
         for model in CANDIDATE_MODELS:
-            # checkpoint_score is produced by model_selection.py, not by the
-            # raw rolling backtest dataframe. Read it from the matching
-            # best_models row so the audit reports the same scores used for
-            # production selection.
             score = None
             if not selection.empty:
                 score = selection.iloc[0].get(f"{model}_checkpoint_score")
@@ -62,12 +57,7 @@ def _log_backtest_quality(backtest_results: pd.DataFrame, best_models: pd.DataFr
                 parts.append(f"{model}: WAPE={float(score):.2f}%, {bias_text}, {obs_text}")
             else:
                 parts.append(f"{model}: WAPE=NA, bias={'%.2f%%' % float(bias_value) if pd.notna(bias_value) else 'NA'}, n={int(observations) if pd.notna(observations) else 'NA'}")
-
-        selected_text = (
-            f"{selected} (score={float(selected_score):.2f}%)"
-            if selected_score is not None and pd.notna(selected_score)
-            else selected
-        )
+        selected_text = f"{selected} (score={float(selected_score):.2f}%)" if selected_score is not None and pd.notna(selected_score) else selected
         logger.info("%s | selected=%s | %s", key, selected_text, " | ".join(parts))
 
 
@@ -77,12 +67,8 @@ def run_training_pipeline() -> dict:
     logger.info("Extracting %d months of region-level Sell-In history...", history_months)
     daily = validate_daily_sellin(get_daily_sellin(history_months))
     targets = validate_targets(get_region_monthly_targets(history_months))
-    calendar = validate_calendar(
-        get_calendar(history_months),
-        required_checkpoints=FORECAST_CONFIG["backtest_checkpoints"],
-    )
+    calendar = validate_calendar(get_calendar(history_months), required_checkpoints=FORECAST_CONFIG["backtest_checkpoints"])
     validate_region_alignment(daily, targets)
-
     if daily.empty:
         raise ValueError("No Sell-In history available for the configured period.")
     if calendar.empty:
@@ -92,7 +78,6 @@ def run_training_pipeline() -> dict:
     start = current_month - pd.DateOffset(months=history_months - 1)
     monthly_raw = to_monthly(daily, GROUP_COLS)
     monthly = complete_month_panel(monthly_raw, GROUP_COLS, start, current_month)
-
     closed = monthly[monthly["periode"] < current_month].copy()
     history_counts = closed.groupby(GROUP_COLS)["periode"].nunique()
     eligible = history_counts[history_counts >= FORECAST_CONFIG["min_history_months"]].index
@@ -107,57 +92,47 @@ def run_training_pipeline() -> dict:
         raise ValueError("Calendar is missing total_working_days for one or more forecast months.")
 
     logger.info("Running WD4/7/10/15/20 rolling backtest for baseline/ETS/SARIMA/XGBoost...")
-    backtest_results = rolling_backtest(
-        monthly,
-        GROUP_COLS,
+    backtest_results, xgb_pairs, base_pairs = rolling_backtest(
+        monthly, GROUP_COLS,
         min_train_months=FORECAST_CONFIG["backtest_min_train_months"],
-        daily_history=daily,
-        calendar=calendar,
+        daily_history=daily, calendar=calendar,
         checkpoints=FORECAST_CONFIG["backtest_checkpoints"],
-        targets=targets,
+        targets=targets, return_predictions=True,
     )
     best_models = select_best_model(backtest_results, GROUP_COLS)
     _log_backtest_quality(backtest_results, best_models)
 
+    ensemble_audit = audit_ensemble(
+        backtest_results, best_models, base_pairs, xgb_pairs,
+        FORECAST_CONFIG["backtest_checkpoints"], GROUP_COLS,
+    )
+    log_ensemble_audit(ensemble_audit)
+
     logger.info("Running strict leakage-safe P10/P50/P90 interval backtest...")
     interval_backtest_results = rolling_interval_backtest(
-        monthly_history=monthly,
-        daily_history=daily,
-        calendar=calendar,
-        group_cols=GROUP_COLS,
-        checkpoints=FORECAST_CONFIG["backtest_checkpoints"],
-        min_train_months=FORECAST_CONFIG["backtest_min_train_months"],
-        targets=targets,
+        monthly_history=monthly, daily_history=daily, calendar=calendar,
+        group_cols=GROUP_COLS, checkpoints=FORECAST_CONFIG["backtest_checkpoints"],
+        min_train_months=FORECAST_CONFIG["backtest_min_train_months"], targets=targets,
     )
 
     logger.info("Training pooled history-only XGBoost...")
     train_features = hist_features[hist_features["periode"] < current_month].copy()
     xgb_model = train_xgboost(train_features)
-
     logger.info("Training checkpoint-aware XGBoost models...")
     checkpoint_training = []
     for checkpoint in FORECAST_CONFIG["backtest_checkpoints"]:
-        frame = _build_training_frame(
-            monthly, daily, calendar, targets, GROUP_COLS,
-            current_month, checkpoint, FORECAST_CONFIG["backtest_min_train_months"]
-        )
+        frame = _build_training_frame(monthly, daily, calendar, targets, GROUP_COLS, current_month, checkpoint, FORECAST_CONFIG["backtest_min_train_months"])
         if not frame.empty:
             checkpoint_training.append(frame)
     checkpoint_training = pd.concat(checkpoint_training, ignore_index=True) if checkpoint_training else pd.DataFrame()
-    xgb_checkpoint_models = train_xgboost_checkpoint_models(
-        checkpoint_training,
-        FORECAST_CONFIG["backtest_checkpoints"],
-    )
+    xgb_checkpoint_models = train_xgboost_checkpoint_models(checkpoint_training, FORECAST_CONFIG["backtest_checkpoints"])
 
     return {
-        "daily": daily,
-        "monthly": monthly,
-        "hist_features": hist_features,
-        "calendar": calendar,
-        "targets": targets,
+        "daily": daily, "monthly": monthly, "hist_features": hist_features,
+        "calendar": calendar, "targets": targets,
         "backtest_results": backtest_results,
+        "ensemble_audit": ensemble_audit,
         "interval_backtest_results": interval_backtest_results,
-        "best_models": best_models,
-        "xgb_model": xgb_model,
+        "best_models": best_models, "xgb_model": xgb_model,
         "xgb_checkpoint_models": xgb_checkpoint_models,
     }
