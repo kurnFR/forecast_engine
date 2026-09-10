@@ -61,6 +61,52 @@ def _log_backtest_quality(backtest_results: pd.DataFrame, best_models: pd.DataFr
         logger.info("%s | selected=%s | %s", key, selected_text, " | ".join(parts))
 
 
+def _log_interval_quality(interval_results: pd.DataFrame) -> None:
+    """Log leakage-safe empirical interval coverage and width by region."""
+    if interval_results.empty:
+        logger.warning("Interval quality audit skipped: no valid interval results.")
+        return
+
+    logger.info("=== Interval quality audit ===")
+    for key, group in interval_results.groupby(GROUP_COLS, dropna=False):
+        lower_coverage = (group["actual"] < group["forecast_p10"]).mean() * 100.0
+        upper_coverage = (group["actual"] > group["forecast_p90"]).mean() * 100.0
+        central_coverage = (
+            (group["actual"] >= group["forecast_p10"])
+            & (group["actual"] <= group["forecast_p90"])
+        ).mean() * 100.0
+        p50_wape = (
+            group["forecast_p50"].sub(group["actual"]).abs().sum()
+            / group["actual"].abs().sum()
+            * 100.0
+            if group["actual"].abs().sum() > 0
+            else float("nan")
+        )
+        bias_pct = (
+            group["forecast_p50"].sub(group["actual"]).sum()
+            / group["actual"].abs().sum()
+            * 100.0
+            if group["actual"].abs().sum() > 0
+            else float("nan")
+        )
+        width_pct = group["interval_width_pct_actual"].replace([float("inf"), -float("inf")], pd.NA).dropna().mean() * 100.0
+        observations = len(group)
+        checkpoint_count = group["checkpoint"].nunique()
+        region_key = ", ".join(f"{col}={value}" for col, value in zip(GROUP_COLS, key if isinstance(key, tuple) else (key,)))
+        logger.info(
+            "%s | n=%d | checkpoints=%d | below_p10=%.2f%% | above_p90=%.2f%% | central_coverage=%.2f%% | p50_WAPE=%.2f%% | p50_bias=%.2f%% | interval_width=%.2f%%",
+            region_key,
+            observations,
+            checkpoint_count,
+            lower_coverage,
+            upper_coverage,
+            central_coverage,
+            p50_wape,
+            bias_pct,
+            width_pct,
+        )
+
+
 def run_training_pipeline() -> dict:
     """Extract, validate, panelize, backtest and train the V2 model set."""
     history_months = FORECAST_CONFIG["history_months"]
@@ -114,6 +160,7 @@ def run_training_pipeline() -> dict:
         group_cols=GROUP_COLS, checkpoints=FORECAST_CONFIG["backtest_checkpoints"],
         min_train_months=FORECAST_CONFIG["backtest_min_train_months"], targets=targets,
     )
+    _log_interval_quality(interval_backtest_results)
 
     logger.info("Training pooled history-only XGBoost...")
     train_features = hist_features[hist_features["periode"] < current_month].copy()
