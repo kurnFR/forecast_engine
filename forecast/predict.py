@@ -18,18 +18,13 @@ GROUP_COLS = FORECAST_CONFIG["grain"]
 def _next_month_xgb_features(hist_features, current_features, calendar, targets, current_month):
     """Construct current-month checkpoint features using MTD plus closed history.
 
-    The historical feature row for ``current_month`` is already leakage-safe:
+    The historical feature row for ``current_month`` is leakage-safe because
     build_historical_features() creates its lag/rolling/seasonal features from
-    months strictly before the current month. Using the latest *closed* row
-    instead would shift every lag back by one month (for example, lag_1 would
-    become two-months-ago), producing the wrong XGBoost input.
+    months strictly before the current month.
     """
     current = current_features.copy()
     target = targets[targets["periode"] == current_month][GROUP_COLS + ["target_sellin"]].drop_duplicates()
 
-    # IMPORTANT: use the current-month historical-feature row. Its features
-    # are generated with shift/rolling operations, so the current target is
-    # not included and leakage is avoided.
     base = hist_features[hist_features["periode"] == current_month].copy()
     base = base.sort_values("periode").drop_duplicates(GROUP_COLS, keep="last")
 
@@ -47,6 +42,13 @@ def _next_month_xgb_features(hist_features, current_features, calendar, targets,
 def _active_checkpoint(elapsed_working_days, checkpoints):
     valid = [cp for cp in checkpoints if cp <= int(elapsed_working_days)]
     return max(valid) if valid else None
+
+
+def _missing_features(model, row):
+    """Return required XGBoost features that are missing or null."""
+    cols = getattr(model, "_feature_cols_used", [])
+    missing = [c for c in cols if c not in row.index or pd.isna(row.get(c))]
+    return missing
 
 
 def run_prediction_pipeline(trained):
@@ -80,19 +82,29 @@ def run_prediction_pipeline(trained):
     checkpoints = FORECAST_CONFIG.get("backtest_checkpoints", [4, 7, 10, 15, 20])
     for _, row in xgb_features.iterrows():
         checkpoint = _active_checkpoint(row["elapsed_working_days"], checkpoints)
-        model = xgb_checkpoint_models.get(checkpoint) if checkpoint is not None else None
-        if model is None:
-            model = xgb_model
-            feature_row = row
-        else:
+        checkpoint_model = xgb_checkpoint_models.get(checkpoint) if checkpoint is not None else None
+        pred = None
+
+        if checkpoint_model is not None:
             feature_row = row.copy()
             feature_row["checkpoint"] = checkpoint
-        pred = predict_xgboost(model, pd.DataFrame([feature_row]))
+            pred = predict_xgboost(checkpoint_model, pd.DataFrame([feature_row]))
+            if pred is None:
+                missing = _missing_features(checkpoint_model, feature_row)
+                logger.warning(
+                    "Checkpoint XGBoost unavailable for %s at WD%s; missing features: %s. Falling back to pooled XGBoost.",
+                    row.get(GROUP_COLS[0]), checkpoint, ", ".join(missing) if missing else "prediction failure",
+                )
+
         if pred is None:
-            logger.warning(
-                "XGBoost prediction unavailable for %s at WD%s; required feature values are missing.",
-                row.get(GROUP_COLS[0]), checkpoint,
-            )
+            pooled_missing = _missing_features(xgb_model, row)
+            pred = predict_xgboost(xgb_model, pd.DataFrame([row]))
+            if pred is None:
+                logger.warning(
+                    "Pooled XGBoost prediction unavailable for %s; missing features: %s.",
+                    row.get(GROUP_COLS[0]), ", ".join(pooled_missing) if pooled_missing else "prediction failure",
+                )
+
         xgb_rows.append({
             **{c: row[c] for c in GROUP_COLS},
             "forecast_xgboost": pred,
