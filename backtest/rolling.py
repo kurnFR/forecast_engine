@@ -42,8 +42,12 @@ def _residual_stats(pairs):
     return float(np.quantile(residuals, 0.10)), float(np.quantile(residuals, 0.90)), len(residuals)
 
 
-def rolling_backtest(monthly_history, group_cols, min_train_months=24, daily_history=None, calendar=None, checkpoints=None, targets=None):
-    """Evaluate candidate models at WD checkpoints with residual calibration."""
+def rolling_backtest(monthly_history, group_cols, min_train_months=24, daily_history=None, calendar=None, checkpoints=None, targets=None, return_predictions=False):
+    """Evaluate candidate models at WD checkpoints with residual calibration.
+
+    When return_predictions=True, also return leakage-safe OOS prediction pairs
+    keyed by group and checkpoint for ensemble auditing.
+    """
     checkpoints = checkpoints or [4, 7, 10, 15, 20]
     if daily_history is None or calendar is None:
         raise ValueError("V2 backtest requires daily_history and calendar for WD checkpoints.")
@@ -59,10 +63,16 @@ def rolling_backtest(monthly_history, group_cols, min_train_months=24, daily_his
     calendar = calendar.copy()
     calendar["date"] = pd.to_datetime(calendar["date"])
 
+    base_pair_store = {
+        (key if isinstance(key, tuple) else (key,)): {model: {cp: [] for cp in checkpoints} for model in ("baseline", "ets", "sarima")}
+        for key in monthly[group_cols].drop_duplicates().itertuples(index=False, name=None)
+    }
+
     rows = []
     for key, group in monthly.groupby(group_cols):
         key_vals = key if isinstance(key, tuple) else (key,)
         key_dict = dict(zip(group_cols, key_vals))
+        key_tuple = tuple(key_vals)
         g = group.sort_values("periode").reset_index(drop=True)
         observations = {model: [] for model in ("baseline", "ets", "sarima")}
         checkpoint_values = {model: {cp: [] for cp in checkpoints} for model in observations}
@@ -91,6 +101,7 @@ def rolling_backtest(monthly_history, group_cols, min_train_months=24, daily_his
                         pair = (float(actual), float(pred))
                         observations[model].append(pair)
                         checkpoint_values[model][checkpoint].append(pair)
+                        base_pair_store[key_tuple][model][checkpoint].append(pair)
 
         row = dict(key_dict)
         for model, pairs in observations.items():
@@ -116,6 +127,21 @@ def rolling_backtest(monthly_history, group_cols, min_train_months=24, daily_his
         rows.append(row)
 
     base_results = pd.DataFrame(rows)
+    if return_predictions:
+        xgb_results, xgb_pairs = rolling_xgb_checkpoint_backtest(
+            monthly_history=monthly,
+            daily_history=daily,
+            calendar=calendar,
+            group_cols=group_cols,
+            checkpoints=checkpoints,
+            min_train_months=min_train_months,
+            targets=targets,
+            return_predictions=True,
+        )
+        if base_results.empty:
+            return xgb_results, xgb_pairs, base_pair_store
+        return base_results.merge(xgb_results, on=group_cols, how="left"), xgb_pairs, base_pair_store
+
     xgb_results = rolling_xgb_checkpoint_backtest(
         monthly_history=monthly,
         daily_history=daily,
