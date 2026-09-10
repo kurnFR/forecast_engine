@@ -369,3 +369,113 @@ with the rest of the codebase (`to_monthly()` etc. all use `monthly_value`).
 4. Only then run `python main.py` against a real (or realistic synthetic)
    Postgres instance to sanity-check runtime and output rows before
    scheduling it anywhere.
+
+## Code review notes, round 2 (Claude, 2026-09-10)
+
+Reviewed at commit `82d66ca`. Nothing in the codebase was changed as part of
+this review; only this section was added. This round was prompted by a real
+traceback from running `python3 main.py` locally:
+
+```
+File ".../models/ensemble.py", line 50, in <module>
+    def _residual_interval(row: pd.Series, weights: dict, p50: float) -> tuple[float, float]:
+TypeError: 'type' object is not subscriptable
+```
+
+### ✅ Both blocking bugs from round 1 are confirmed fixed
+
+- `_xgb_checkpoint_features` — the `ImportError` is gone; `backtest.rolling_intervals`, `forecast.predict`, and `main` all import cleanly now (verified by direct import).
+- The `target_col` mismatch — `_build_training_frame()` in `backtest/xgb_checkpoint.py` now aliases `row["monthly_value"] = row["actual"]` before the row is used for training, so `train_xgboost_checkpoint(..., target_col="monthly_value")` no longer raises `KeyError`.
+- **Full test suite: 17/17 passing** (up from 0/15 collectible last round — collection used to abort entirely). CI should be green again on the next push.
+- `CANDIDATE_MODELS` has been centralized into `config.py` and most modules (`models/ensemble.py`, `backtest/ensemble.py`, `backtest/rolling_intervals.py`) now import it from there — addresses last round's minor duplication note, though see below, it's not fully done.
+
+### 🔴 New finding: the traceback above is the *same bug class* recurring, and one more instance is still live
+
+The `tuple[float, float]` the user hit in `models/ensemble.py` has already been
+fixed in the current commit (now uses `from typing import Tuple` /
+`Tuple[float, float]`, confirmed by reading the file — so pulling latest
+should clear that specific error). But there is **one more, not-yet-fixed
+occurrence of the identical problem**, and it sits directly on the
+`main.py` import path:
+
+```python
+# data/validation.py, line 91 — no `from __future__ import annotations` in this file
+def validate_calendar(calendar: pd.DataFrame, required_checkpoints: list[int] | None = None) -> pd.DataFrame:
+```
+
+`list[int]` needs Python 3.9+ (PEP 585) and `X | None` needs Python 3.10+
+(PEP 604) *when evaluated eagerly*, which is exactly what happens here since
+this file has no `from __future__ import annotations`. Traced the import
+chain: `main.py` → `forecast/train.py` → `from data.validation import (...,
+validate_calendar)` → this line executes at import time. **On whatever
+Python version produced the original `tuple[float, float]` error (must be
+< 3.9, since that's a PEP 585 feature too), this exact same `TypeError:
+'type' object is not subscriptable` will reappear here** the moment the
+previous fix is pulled — just one file later in the traceback. Confirmed
+by scanning every `.py` file in the repo for `list[`, `dict[`, `tuple[`,
+`set[`, or `X | None` outside files that opt into postponed evaluation via
+`from __future__ import annotations`; this is the only remaining hit.
+
+Two ways to close this out for good rather than one file at a time:
+1. Add `from __future__ import annotations` to `data/validation.py` (and
+   ideally to every module in the project, as cheap insurance against the
+   next one of these), **or**
+2. Rewrite the signature using `typing.Optional[typing.List[int]]`
+   consistent with how `models/ensemble.py` and `models/xgboost_model.py`
+   were just fixed, **or**
+3. Pin and document a minimum Python version (3.10+) in `requirements.txt`
+   / README and stop worrying about this class of bug entirely. Right now
+   no minimum Python version is declared anywhere in the repo (no
+   `runtime.txt`, `pyproject.toml`, `python_requires`, or README mention),
+   so there's nothing stopping a contributor from reintroducing this same
+   issue in a new file.
+
+### 🟡 Smaller items
+
+- **`CANDIDATE_MODELS` centralization is incomplete.** `config.py` now
+  defines it once, and `models/ensemble.py`, `backtest/ensemble.py`, and
+  `backtest/rolling_intervals.py` import it from there — but
+  `backtest/model_selection.py:5` and `forecast/train.py:26` still each
+  define their own local copy of the same four-model tuple/list instead of
+  importing it. Low risk today since all four definitions currently agree,
+  but it's the kind of thing that silently drifts later.
+- **Operational note on data depth, not a bug**: `FORECAST_CONFIG` requires
+  `min_history_months: 24` and `backtest_min_train_months: 24` — a region
+  needs at least 24 closed months of history before it's eligible for a
+  forecast at all (`run_training_pipeline` filters regions below that
+  threshold out of `monthly` entirely). Worth double-checking that your
+  real `sellinascend` history actually goes back that far for every region
+  you care about forecasting — any region with less history will silently
+  produce zero output rows rather than an error.
+- The region-mapping join was changed to
+  `sellinascend."Customer Area" = vt_sr_per_rsmasw.kota`, with a code
+  comment stating it's been validated as one-to-one against production
+  data. Good — this replaces the `city`/`kota` guess flagged in round 1
+  with something you've apparently verified directly; just flagging that
+  I can't independently confirm that from here, so it's worth keeping that
+  validation claim honest as the mapping table evolves.
+
+### 🟢 New since round 1, worth calling out
+
+- `backtest/ensemble.py::audit_ensemble` is a nice addition: it compares the
+  production ensemble against each candidate model on the *same* common
+  out-of-sample (target month, checkpoint) pairs, so the "is the ensemble
+  actually better than just picking the best single model" question has a
+  fair, leakage-safe answer instead of an assumption.
+- `models/ensemble.py::_row_backtest_weights` now logs when it falls back to
+  static default weights instead of silently doing so — directly addresses
+  the round-1 concern about that failure mode being invisible.
+- Checkpoint-specific residual interval calibration
+  (`{model}_wd{checkpoint}_residual_q10/q90`) with a documented fallback
+  chain (checkpoint-specific → pooled → conservative spread-based) is a
+  sensible way to keep P10/P90 honest as the month progresses.
+
+### Suggested next step
+
+Just the `data/validation.py` fix — either add
+`from __future__ import annotations` there (fastest, matches nothing else
+needs to change) or convert to `typing.Optional`/`typing.List` for
+consistency with the two files already fixed this way. After that,
+`python3 main.py` should get past import time; whether it completes
+successfully end-to-end against your real Postgres instance is the next
+thing to verify.
