@@ -146,13 +146,7 @@ def _build_training_frame(monthly, daily, calendar, targets, group_cols, target_
 
 
 def _build_all_checkpoint_training_frames(monthly, daily, calendar, targets, group_cols, checkpoints, min_train_months):
-    """Build each checkpoint snapshot once, avoiding repeated historical scans.
-
-    The rolling backtest needs the same historical checkpoint examples many
-    times. Materializing them once per checkpoint preserves the leakage rule
-    while removing the expensive nested target-month/dataframe filtering that
-    previously made the backtest unnecessarily slow.
-    """
+    """Build each checkpoint snapshot once, avoiding repeated historical scans."""
     if monthly.empty:
         return {int(cp): pd.DataFrame() for cp in checkpoints}
 
@@ -167,8 +161,21 @@ def _build_all_checkpoint_training_frames(monthly, daily, calendar, targets, gro
     }
 
 
-def rolling_xgb_checkpoint_backtest(monthly_history, daily_history, calendar, group_cols, checkpoints, min_train_months=24, targets=None):
-    """Evaluate checkpoint-aware XGBoost using only prior target-month information."""
+def rolling_xgb_checkpoint_backtest(
+    monthly_history,
+    daily_history,
+    calendar,
+    group_cols,
+    checkpoints,
+    min_train_months=24,
+    targets=None,
+    return_predictions=False,
+):
+    """Evaluate checkpoint-aware XGBoost using only prior target-month information.
+
+    When return_predictions=True, also return the leakage-safe OOS prediction
+    pairs keyed by region and checkpoint for downstream ensemble auditing.
+    """
     monthly = monthly_history.copy()
     monthly["periode"] = pd.to_datetime(monthly["periode"])
     daily = daily_history.copy()
@@ -259,4 +266,7 @@ def rolling_xgb_checkpoint_backtest(monthly_history, daily_history, calendar, gr
             out["xgboost_residual_q10"] = np.nan
             out["xgboost_residual_q90"] = np.nan
         results.append(out)
-    return pd.DataFrame(results)
+    result_df = pd.DataFrame(results)
+    if return_predictions:
+        return result_df, pair_store
+    return result_df
