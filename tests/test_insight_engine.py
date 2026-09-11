@@ -1,4 +1,8 @@
-from insight.engine import build_prompt, validate
+import json
+
+import pytest
+
+from insight.engine import _extract_json, build_prompt, validate
 
 
 def base(level="REGION"):
@@ -34,35 +38,124 @@ def base(level="REGION"):
     }
 
 
+def valid_insight(row, identity=None, priority=None):
+    level = row["hierarchy_level"]
+    key = "entity_code" if level == "REGION" else "gm_code" if level == "GM" else "insight_level"
+    return {
+        key: identity if identity is not None else ("CEO" if level == "CEO" else row["entity_code"]),
+        "ai_insight_category": "FORECAST_RISK",
+        "ai_diagnosis": "Forecast P50 berada di bawah target dan masih berisiko.",
+        "triggered_action_plan": "Pantau realisasi sell-in dan fokus pada percepatan eksekusi.",
+        "priority": priority if priority is not None else row["priority"],
+    }
+
+
 def test_region_prompt_contains_v2_contract_and_no_v1_momentum():
     prompt = build_prompt(base())
     assert "v_ai_forecast_insight_input_v2" in prompt
     assert "Never use daily-rate or momentum forecasting logic" in prompt
 
 
-def test_region_validation_preserves_identity_and_priority():
-    row = base()
-    insight = {
-        "entity_code": "ASWJWA1",
-        "ai_insight_category": "FORECAST_RISK",
-        "ai_diagnosis": "Forecast P50 berada di bawah target dan masih berisiko.",
-        "triggered_action_plan": "Pantau realisasi sell-in dan fokus pada percepatan eksekusi.",
-        "priority": "MEDIUM",
-    }
+def test_gm_prompt_uses_gm_identity_and_preserves_priority():
+    row = base("GM")
+    prompt = build_prompt(row)
+    assert "LEVEL: GM" in prompt
+    assert '"gm_code": "GM-COMJAWA"' in prompt
+    assert '"priority": "MEDIUM"' in prompt
+
+
+def test_ceo_prompt_uses_ceo_identity():
+    row = base("CEO")
+    prompt = build_prompt(row)
+    assert "LEVEL: CEO" in prompt
+    assert '"insight_level": "CEO"' in prompt
+
+
+def test_validation_preserves_region_identity_and_priority():
+    row = base("REGION")
+    insight = valid_insight(row)
     assert validate(row, insight) == insight
+
+
+def test_validation_preserves_gm_identity_and_priority():
+    row = base("GM")
+    insight = valid_insight(row)
+    assert validate(row, insight) == insight
+
+
+def test_validation_preserves_ceo_identity_and_priority():
+    row = base("CEO")
+    insight = valid_insight(row)
+    assert validate(row, insight) == insight
+
+
+def test_validation_accepts_review_priority():
+    row = base()
+    row["priority"] = "REVIEW"
+    insight = valid_insight(row, priority="REVIEW")
+    assert validate(row, insight)["priority"] == "REVIEW"
 
 
 def test_validation_rejects_changed_priority():
     row = base()
-    insight = {
-        "entity_code": "ASWJWA1",
-        "ai_insight_category": "FORECAST_RISK",
-        "ai_diagnosis": "Diagnosis.",
-        "triggered_action_plan": "Action.",
-        "priority": "HIGH",
-    }
-    try:
+    with pytest.raises(RuntimeError, match="priority"):
+        validate(row, valid_insight(row, priority="HIGH"))
+
+
+def test_validation_rejects_invalid_priority():
+    row = base()
+    with pytest.raises(RuntimeError, match="invalid priority"):
+        validate(row, valid_insight(row, priority="URGENT"))
+
+
+def test_validation_rejects_changed_identity_for_all_levels():
+    for level in ("REGION", "GM", "CEO"):
+        row = base(level)
+        with pytest.raises(RuntimeError, match="changed"):
+            validate(row, valid_insight(row, identity="OTHER"))
+
+
+def test_validation_rejects_extra_or_missing_fields():
+    row = base()
+    insight = valid_insight(row)
+    insight["unexpected"] = "x"
+    with pytest.raises(RuntimeError, match="extra"):
         validate(row, insight)
-        assert False, "expected validation failure"
-    except RuntimeError as exc:
-        assert "priority" in str(exc)
+
+    insight = valid_insight(row)
+    del insight["ai_diagnosis"]
+    with pytest.raises(RuntimeError, match="missing"):
+        validate(row, insight)
+
+
+def test_no_forecast_data_prompt_forbids_inventing_forecast_or_risk():
+    row = base()
+    row["performance_scenario"] = "NO_FORECAST_DATA"
+    row["priority"] = "REVIEW"
+    prompt = build_prompt(row)
+    assert "Forecast belum tersedia" in prompt
+    assert "do not manufacture a business risk" in prompt
+
+
+def test_parser_accepts_hermes_extra_output_before_json():
+    output = 'Berikut hasilnya:\n\n' + json.dumps(valid_insight(base()), ensure_ascii=False) + '\nselesai.'
+    assert _extract_json(output)["entity_code"] == "ASWJWA1"
+
+
+def test_parser_rejects_non_json_output():
+    with pytest.raises(RuntimeError, match="did not return JSON"):
+        _extract_json("Hermes gagal menghasilkan output")
+
+
+def test_prompt_contains_no_v1_daily_rate_input_fields():
+    prompt = build_prompt(base())
+    assert "mtd_daily_run_rate" not in prompt
+    assert "avg_7_working_days" not in prompt
+    assert "momentum_factor" not in prompt
+
+
+def test_review_priority_is_normalized_to_uppercase():
+    row = base()
+    row["priority"] = "review"
+    insight = valid_insight(row, priority="review")
+    assert validate(row, insight)["priority"] == "REVIEW"
