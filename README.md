@@ -479,3 +479,180 @@ consistency with the two files already fixed this way. After that,
 `python3 main.py` should get past import time; whether it completes
 successfully end-to-end against your real Postgres instance is the next
 thing to verify.
+
+## Code review notes, round 3 (Claude, 2026-09-11)
+
+Reviewed at commit `80d9c87`. Nothing in the codebase was changed as part
+of this review; only this section was added. This round covers the new
+`sql/views/*_v2.sql` layer — the deterministic V2 diagnostics/insight
+contract that a downstream AI insight agent reads from.
+
+### ✅ Round 2 issue confirmed fixed
+
+`data/validation.py` now has `from __future__ import annotations` as its
+first import. **Full test suite: 23/23 passing.** The Python-version class
+of bug from rounds 1–2 appears fully closed out now.
+
+### 🔴 Most important finding: GM/CEO uncertainty bounds are statistically invalid as written
+
+`v_ai_gm_monthly_diagnostics_v2.sql` and `v_ai_ceo_monthly_diagnostics_v2.sql`
+both compute `forecast_p10` and `forecast_p90` at the aggregate level with:
+
+```sql
+SUM(forecast_p10) AS forecast_p10,
+SUM(forecast_p50) AS forecast_p50,
+SUM(forecast_p90) AS forecast_p90,
+```
+
+**Summing quantiles across regions is not the same as the quantile of the
+sum.** P50 is fine to sum (expectation is linear, so summing medians is a
+reasonable approximation of the sum's median under typical conditions). P10
+and P90 are not — they're tail bounds, and unless every region's forecast
+error is perfectly positively correlated, some of the regions that miss low
+will be offset by others that miss high. The true P10/P90 of a GM's *total*
+sell-in is narrower than the sum of each region's individual P10/P90,
+because independent (or even partially independent) errors partially
+diversify away at the portfolio level. Summing the raw bounds instead
+systematically **overstates uncertainty** at GM level, and — because the CEO
+view aggregates on top of the already-summed GM/region numbers — that bias
+compounds a second time at CEO level. In practice this means
+`forecast_uncertainty_pct` will read wider than it actually is the higher
+up the hierarchy you go, which is exactly the opposite of what you'd
+intuitively expect (aggregates should usually look *more* certain, not
+less).
+
+Notably, this is the exact gap your own README already flagged as
+outstanding, in "Still required before production sign-off": *"Add forecast
+reconciliation rules if forecasts are consumed together with a higher-level
+corporate aggregate."* The GM/CEO views were built before that item was
+addressed, so they currently do the naive thing.
+
+Ways to fix this, roughly in order of effort:
+1. **Cheapest real fix**: treat regional forecast errors as independent and
+   aggregate the *half-widths* in quadrature instead of summing the raw
+   bounds — i.e. `gm_p50 ± sqrt(Σ (region_half_width)^2)` instead of
+   `Σ region_p10 .. Σ region_p90`. Still an approximation (errors are
+   probably not fully independent — e.g. a national sales holiday affects
+   every region at once), but it's a one-line-per-view change that stops
+   actively overstating uncertainty.
+2. **Better**: keep the OOS residuals per region from the Python side
+   (`backtest/rolling_intervals.py` already computes these) and combine
+   them via a correlated bootstrap/Monte Carlo at GM/CEO grain in
+   `forecast_engine` itself, writing native GM/CEO-level P10/P50/P90
+   alongside the region-level ones into `forecast_sellin_eom` (or a sibling
+   table) — this also naturally captures cross-region correlation instead
+   of assuming independence.
+3. **At minimum for now**: rename `forecast_uncertainty_pct` at GM/CEO
+   level in the view comment/docs to make clear it's a conservative
+   upper-bound approximation, not a calibrated interval — so nobody
+   reading the CEO dashboard treats "42% uncertainty" as a validated
+   statistical statement.
+
+### 🟡 NULL handling: a region with no forecast can get silently mislabeled as CRITICAL
+
+In `v_ai_region_monthly_insight_v2.sql`, every scenario/priority `CASE`
+compares `achievement_pct_forecast` (or its GM/CEO equivalents) with `>=`.
+If that value is `NULL` — which happens whenever `target_sellin` is zero or
+missing, or whenever `forecast_p50` itself is `NULL` — every `WHEN`
+condition evaluates to `NULL` (not true), so execution falls through to the
+`ELSE` branch:
+
+```sql
+CASE
+    WHEN b.achievement_pct_forecast >= 100 THEN 'TARGET_ACHIEVED'
+    ...
+    ELSE 'CRITICAL'
+END AS performance_scenario
+```
+
+A region with genuinely missing data — not a real crisis, just no signal —
+gets labeled `'CRITICAL'` (and separately, via the same NULL-passthrough
+logic in the priority `CASE`, `'LOW'` priority). `'CRITICAL'`
+performance + `'LOW'` priority is an internally inconsistent, confusing pair
+for whatever narrates this to a CEO or GM. Worth adding an explicit
+`WHEN achievement_pct_forecast IS NULL THEN 'NO_FORECAST_DATA'` branch (and
+a matching `'REVIEW'` or similar priority) so missing data reads as missing
+data, not as a false crisis signal.
+
+Related and arguably more important: this view is driven `FROM
+dwh_prod.forecast_sellin_eom`, and (per the V2 contract already documented
+above) a region needs **24 closed months of history** to get a row there at
+all. Any region below that threshold doesn't just get a NULL scenario — it
+**doesn't appear in this view, or any of the GM/CEO rollups, at all**. If
+even one region silently falls below the eligibility bar (new region, data
+gap, etc.), nobody looking at the CEO dashboard has any way to know a
+region went missing from the picture, since there's no explicit coverage
+check anywhere in this SQL layer. A small `v_ai_forecast_coverage_v2` view
+— total known regions from `mv_ai_region_monthly` vs. regions actually
+present in `forecast_sellin_eom` for the current period — would make gaps
+visible instead of silent.
+
+### 🟡 Unverified join: `dwh_prod.m_sales_org_hierarchy`
+
+Both the region view (for `regionname`) and the GM view (for
+`gm_code`/`gm_name`, and for the region→GM rollup itself) join against
+`dwh_prod.m_sales_org_hierarchy ... AND h.is_active = TRUE`. This table
+wasn't part of any schema shared in earlier rounds, so I can't verify it
+from here — but the failure mode to check for specifically is **fan-out**:
+if any `regioncode` has more than one `is_active = TRUE` row in that table
+(a data-entry duplicate, or a region mid-transition between GMs), the GM
+view's `JOIN` will silently duplicate that region's `SUM(total_sellin)` /
+`SUM(target_sellin)` into the aggregate, inflating the GM's (and therefore
+the CEO's) numbers with no error raised anywhere. Worth adding a `UNIQUE`
+constraint or partial unique index on `(regioncode) WHERE is_active`, or at
+minimum a one-off `GROUP BY regioncode HAVING COUNT(*) > 1` sanity query
+before trusting the rollups.
+
+### 🟢 What's genuinely good here
+
+- The core idea — one deterministic SQL contract
+  (`v_ai_forecast_insight_input_v2`) that an LLM insight layer reads facts
+  from and is explicitly told not to recalculate — is the right shape for
+  keeping an LLM's output grounded in real numbers instead of letting it
+  narrate its own arithmetic.
+- Region → GM → CEO is a clean, consistent `UNION ALL` hierarchy with a
+  stable column contract across all three levels — good for whatever
+  consumes this next.
+- Deriving `performance_scenario`/`forecast_scenario`/`priority` purely from
+  the already-validated `forecast_p10/p50/p90` (rather than reintroducing a
+  second, competing momentum/run-rate calculation in SQL) means there's
+  exactly one forecasting method in the whole system, not two disagreeing
+  ones. That's a real architectural win and avoids a whole class of "why do
+  the two dashboards show different numbers" problems down the line.
+- `shortfall_contribution_pct` and `largest_shortfall_region/gm` are useful,
+  genuinely actionable additions for a GM/CEO reading this — "which region
+  is driving the miss" is exactly the kind of thing raw percentages don't
+  tell you on their own.
+
+### If the goal is "more professional insight, more accurate forecast" — suggested priorities
+
+Beyond the fixes above, in rough order of leverage:
+
+1. **Fix the GM/CEO interval aggregation first** (see 🔴 above) — right now
+   it's the one place where a number flowing into an executive-facing
+   insight is measurably wrong, not just approximate.
+2. **Track forecast accuracy as its own monitored metric.** You already
+   compute WAPE per region per checkpoint during backtesting
+   (`backtest/rolling.py`, `backtest/xgb_checkpoint.py`) — persist that
+   history (e.g. `forecast_accuracy_history`) so a region's *recent, real*
+   track record can be cited in its own insight ("this region's forecast
+   has been within X% of actual for the last 3 months" vs. a region with
+   a spotty history). That turns "trust me" into an auditable claim, which
+   is a meaningfully more professional insight than a bare percentage with
+   no stated confidence behind it — and it gives you a live signal for when
+   a region's model quietly degrades and needs re-tuning.
+3. **Add exogenous features to lift real accuracy** (carried over from
+   round 1, still the highest-leverage unclaimed improvement): Indonesian
+   holiday/Ramadan calendar, known promo/campaign flags, and sell-out or
+   inventory signals as XGBoost features, not just sell-in's own history.
+   Working-day-adjusted run-rate gets you far, but it can't see a demand
+   spike or a promo push coming.
+4. **Add a coverage view** (see 🟡 above) so "this region has no forecast"
+   is a visible, queryable fact rather than a silent absence — this is
+   cheap and directly protects the credibility of the CEO-level insight the
+   first time a real gap happens.
+5. **Consider native quantile models for P10/P90** (e.g. LightGBM/XGBoost
+   quantile objectives, or NGBoost) instead of deriving intervals purely
+   from historical point-forecast residuals — especially valuable for
+   regions near the 24-month eligibility threshold, where the residual
+   history used for calibration is itself thin.
