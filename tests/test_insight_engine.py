@@ -6,7 +6,7 @@ from insight.engine import _extract_json, build_prompt, validate
 
 
 def base(level="REGION"):
-    return {
+    row = {
         "periode": "2026-09-01",
         "hierarchy_level": level,
         "entity_code": "ASWJWA1" if level == "REGION" else "GM-COMJAWA" if level == "GM" else "CEO",
@@ -36,13 +36,17 @@ def base(level="REGION"):
         "largest_gm_shortfall": None,
         "largest_gm_shortfall_pct": None,
     }
+    if level == "GM":
+        row["gm_code"] = "GM-COMJAWA"
+    return row
 
 
 def valid_insight(row, identity=None, priority=None):
     level = row["hierarchy_level"]
     key = "entity_code" if level == "REGION" else "gm_code" if level == "GM" else "insight_level"
+    expected = "CEO" if level == "CEO" else row[key]
     return {
-        key: identity if identity is not None else ("CEO" if level == "CEO" else row["entity_code"]),
+        key: identity if identity is not None else expected,
         "ai_insight_category": "FORECAST_RISK",
         "ai_diagnosis": "Forecast P50 berada di bawah target dan masih berisiko.",
         "triggered_action_plan": "Pantau realisasi sell-in dan fokus pada percepatan eksekusi.",
@@ -60,15 +64,15 @@ def test_gm_prompt_uses_gm_identity_and_preserves_priority():
     row = base("GM")
     prompt = build_prompt(row)
     assert "LEVEL: GM" in prompt
-    assert '"gm_code": "GM-COMJAWA"' in prompt
-    assert '"priority": "MEDIUM"' in prompt
+    assert '"gm_code":"GM-COMJAWA"' in prompt
+    assert '"priority":"MEDIUM"' in prompt
 
 
 def test_ceo_prompt_uses_ceo_identity():
     row = base("CEO")
     prompt = build_prompt(row)
     assert "LEVEL: CEO" in prompt
-    assert '"insight_level": "CEO"' in prompt
+    assert '"insight_level":"CEO"' in prompt
 
 
 def test_validation_preserves_region_identity_and_priority():
@@ -104,6 +108,7 @@ def test_validation_rejects_changed_priority():
 
 def test_validation_rejects_invalid_priority():
     row = base()
+    row["priority"] = "URGENT"
     with pytest.raises(RuntimeError, match="invalid priority"):
         validate(row, valid_insight(row, priority="URGENT"))
 
