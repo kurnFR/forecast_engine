@@ -2,7 +2,8 @@
 import numpy as np
 import pandas as pd
 
-CANDIDATE_MODELS = ["baseline", "ets", "sarima", "xgboost"]
+from config import CANDIDATE_MODELS
+
 CHECKPOINTS = [4, 7, 10, 15, 20]
 
 
