@@ -1,5 +1,6 @@
 -- V2 region monthly business diagnostics
 -- Deterministic facts for the AI insight layer. No narrative and no daily-rate forecast.
+-- Includes candidate model forecasts so GM/CEO diagnostics can aggregate them.
 
 CREATE OR REPLACE VIEW dwh_prod.v_ai_region_monthly_diagnostics_v2 AS
 WITH base AS (
@@ -35,6 +36,10 @@ SELECT
     b.total_sellin,
     b.mtd_working_days,
     b.remaining_working_days,
+    b.forecast_baseline,
+    b.forecast_ets,
+    b.forecast_sarima,
+    b.forecast_xgboost,
     b.forecast_p10,
     b.forecast_p50,
     b.forecast_p90,
