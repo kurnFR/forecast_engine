@@ -17,6 +17,7 @@ from db import read_sql
 VIEW = "dwh_prod.v_ai_forecast_insight_input_v2"
 MODEL_NAME = os.getenv("INSIGHT_MODEL_NAME", "hermes-bi-insight")
 PROMPT_VERSION = "v2-forecast"
+ALLOWED_PRIORITIES = {"LOW", "MEDIUM", "HIGH", "CRITICAL", "REVIEW"}
 REQUIRED = {
     "REGION": ("entity_code", "ai_insight_category", "ai_diagnosis", "triggered_action_plan", "priority"),
     "GM": ("gm_code", "ai_insight_category", "ai_diagnosis", "triggered_action_plan", "priority"),
@@ -41,6 +42,8 @@ def load_input(period: str | None = None):
 def _period_context(row: dict[str, Any]) -> str:
     if row.get("target_sellin") is None:
         return "Target belum tersedia; jangan membuat atau mengestimasi target."
+    if row.get("performance_scenario") == "NO_FORECAST_DATA":
+        return "Forecast belum tersedia; jangan membuat atau mengestimasi forecast atau risiko bisnis."
     return "Gunakan forecast P50/P10/P90 dan achievement forecast persis seperti diberikan."
 
 
@@ -62,7 +65,7 @@ HARD RULES:
   shortfall, contribution, or model spread.
 - Never invent a business/root cause. Model disagreement is a signal only; do not explain why.
 - Never use daily-rate or momentum forecasting logic.
-- { _period_context(row) }
+- {_period_context(row)}
 - Diagnosis and action MUST be Indonesian and executive-ready.
 - Return ONLY one JSON object, with exactly five fields.
 
@@ -79,11 +82,12 @@ OUTPUT:
 FIELD RULES:
 - {identity} must exactly equal the supplied identity.
 - ai_insight_category is a concise classification, not a replacement for performance_scenario or forecast_scenario.
-- priority must exactly equal the supplied priority.
+- priority must exactly equal the supplied priority. Allowed values are LOW, MEDIUM, HIGH, CRITICAL, or REVIEW.
 - ai_diagnosis: max 2 short Indonesian sentences; describe supplied forecast status, gap/risk,
   uncertainty/model-spread signal when material, and management implication. Do not invent causes.
 - triggered_action_plan: exactly one short Indonesian management action supported by the facts.
 - If target is missing, say target is not established rather than estimating it.
+- If priority is REVIEW because forecast data is unavailable, focus on data/forecast readiness and do not manufacture a business risk.
 - No Markdown, no code fence, no extra fields, no commentary.
 """.strip()
 
@@ -126,8 +130,13 @@ def validate(row: dict[str, Any], insight: dict[str, Any]) -> dict[str, Any]:
     expected_identity = row["entity_code"] if level != "CEO" else "CEO"
     if insight[identity] != expected_identity:
         raise RuntimeError(f"Hermes changed {identity}: expected {expected_identity}, got {insight[identity]}")
-    if insight["priority"] != row["priority"]:
+    returned_priority = str(insight["priority"]).strip().upper()
+    expected_priority = str(row["priority"]).strip().upper()
+    if returned_priority != expected_priority:
         raise RuntimeError(f"Hermes changed priority for {expected_identity}")
+    if returned_priority not in ALLOWED_PRIORITIES:
+        raise RuntimeError(f"Hermes returned invalid priority: {insight['priority']}")
+    insight["priority"] = returned_priority
     placeholders = {"...", "CODE", "DIAGNOSIS", "ACTION", "PLACEHOLDER", "N/A", "UNKNOWN", "TBD"}
     for field in fields:
         value = str(insight.get(field, "")).strip()
