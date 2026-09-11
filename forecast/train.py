@@ -19,11 +19,10 @@ from backtest.ensemble import audit_ensemble, log_ensemble_audit
 from backtest.xgb_checkpoint import _build_training_frame
 from backtest.model_selection import select_best_model
 from models.xgboost_model import train_xgboost, train_xgboost_checkpoint_models
-from config import FORECAST_CONFIG
+from config import FORECAST_CONFIG, CANDIDATE_MODELS
 
 logger = logging.getLogger(__name__)
 GROUP_COLS = FORECAST_CONFIG["grain"]
-CANDIDATE_MODELS = ("baseline", "ets", "sarima", "xgboost")
 
 
 def _log_backtest_quality(backtest_results: pd.DataFrame, best_models: pd.DataFrame) -> None:
