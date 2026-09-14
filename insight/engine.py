@@ -77,7 +77,7 @@ SUPPORTING CONTEXT (use only for CEO/GM attention prioritization; never recomput
 {support}
 
 OUTPUT:
-{json.dumps({identity: row.get(identity, "CEO"), "ai_insight_category": "CODE", "ai_diagnosis": "DIAGNOSIS", "triggered_action_plan": "ACTION", "priority": row.get("priority")}, ensure_ascii=False)}
+{json.dumps({identity: row.get(identity, "CEO"), "ai_insight_category": "<CATEGORY>", "ai_diagnosis": "<DIAGNOSIS>", "triggered_action_plan": "<ACTION>", "priority": row.get("priority")}, ensure_ascii=False)}
 
 FIELD RULES:
 - {identity} must exactly equal the supplied identity.
@@ -165,6 +165,18 @@ class InsightAgent:
             elif row["hierarchy_level"] == "GM":
                 support = [r for r in regions if r.get("entity_code") == row.get("largest_shortfall_regioncode")]
             prompt = build_prompt(row, support)
-            insight = validate(row, run_hermes(prompt))
+            insight = None
+            last_err = None
+            for attempt in range(3):
+                try:
+                    raw = run_hermes(prompt)
+                    insight = validate(row, raw)
+                    break
+                except RuntimeError as exc:
+                    last_err = exc
+                    prompt += f"\n\nPREVIOUS ATTEMPT FAILED: {exc}\nFix the invalid field(s) and return the exact same JSON shape with real values. No placeholders."
+                    time.sleep(3)
+            if insight is None:
+                raise RuntimeError(f"Row {row.get('entity_code', row.get('gm_code', '?'))} failed after 3 attempts: {last_err}")
             results.append({"input": row, "insight": insight})
         return results
