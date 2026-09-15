@@ -26,11 +26,12 @@ def base(level="REGION"):
     return row
 
 
-def valid_insight(row, identity=None, priority=None):
+def valid_insight(row, identity=None, priority=None, category=None):
     level = row["hierarchy_level"]
     key = "entity_code" if level == "REGION" else "gm_code" if level == "GM" else "insight_level"
     expected = "CEO" if level == "CEO" else row[key]
-    return {key: identity if identity is not None else expected, "ai_insight_category": "FORECAST_RISK",
+    return {key: identity if identity is not None else expected,
+            "ai_insight_category": category if category is not None else row["performance_scenario"],
             "ai_diagnosis": "Forecast P50 berada di bawah target dan masih berisiko.",
             "triggered_action_plan": "Pantau realisasi sell-in dan fokus pada percepatan eksekusi.",
             "priority": priority if priority is not None else row["priority"]}
@@ -40,6 +41,12 @@ def test_region_prompt_contains_v2_contract_and_no_v1_momentum():
     prompt = build_prompt(base())
     assert "v_ai_forecast_insight_input_v2" in prompt
     assert "Never use daily-rate or momentum forecasting logic" in prompt
+
+
+def test_prompt_requires_controlled_category():
+    prompt = build_prompt(base())
+    assert "ai_insight_category MUST exactly equal performance_scenario" in prompt
+    assert "TARGET_ACHIEVED, NEAR_TARGET, AT_RISK, HIGH_RISK, CRITICAL, NO_FORECAST_DATA" in prompt
 
 
 def test_gm_prompt_uses_gm_identity_and_preserves_priority():
@@ -55,15 +62,15 @@ def test_ceo_prompt_uses_ceo_identity():
     assert '"insight_level": "CEO"' in prompt
 
 
-def test_validation_preserves_region_identity_and_priority():
+def test_validation_preserves_region_identity_category_and_priority():
     row = base("REGION"); insight = valid_insight(row); assert validate(row, insight) == insight
 
 
-def test_validation_preserves_gm_identity_and_priority():
+def test_validation_preserves_gm_identity_category_and_priority():
     row = base("GM"); insight = valid_insight(row); assert validate(row, insight) == insight
 
 
-def test_validation_preserves_ceo_identity_and_priority():
+def test_validation_preserves_ceo_identity_category_and_priority():
     row = base("CEO"); insight = valid_insight(row); assert validate(row, insight) == insight
 
 
@@ -80,6 +87,24 @@ def test_validation_rejects_changed_priority():
 def test_validation_rejects_invalid_priority():
     row = base(); row["priority"] = "URGENT"
     with pytest.raises(RuntimeError, match="invalid priority"): validate(row, valid_insight(row, priority="URGENT"))
+
+
+def test_validation_rejects_invalid_category():
+    row = base()
+    with pytest.raises(RuntimeError, match="invalid ai_insight_category"):
+        validate(row, valid_insight(row, category="FORECAST_RISK"))
+
+
+def test_validation_rejects_category_that_does_not_match_source_scenario():
+    row = base()
+    with pytest.raises(RuntimeError, match="changed ai_insight_category"):
+        validate(row, valid_insight(row, category="HIGH_RISK"))
+
+
+def test_validation_accepts_no_forecast_data_category():
+    row = base(); row["performance_scenario"] = "NO_FORECAST_DATA"; row["priority"] = "REVIEW"
+    insight = valid_insight(row, priority="REVIEW", category="NO_FORECAST_DATA")
+    assert validate(row, insight)["ai_insight_category"] == "NO_FORECAST_DATA"
 
 
 def test_validation_rejects_changed_identity_for_all_levels():
