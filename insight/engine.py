@@ -1,7 +1,7 @@
 """Hermes V2 insight engine.
 
 The SQL view is the sole source of deterministic facts. Hermes only writes
-narrative fields; validation rejects identity, scenario, priority, or shape
+narrative fields; validation rejects identity, category, priority, or shape
 changes. The implementation intentionally reuses the old bi-insight-agent
 Hermes subprocess/retry/JSON pattern without its V1 forecasting inputs.
 """
@@ -18,6 +18,14 @@ VIEW = "dwh_prod.v_ai_forecast_insight_input_v2"
 MODEL_NAME = os.getenv("INSIGHT_MODEL_NAME", "hermes-bi-insight")
 PROMPT_VERSION = "v2-forecast"
 ALLOWED_PRIORITIES = {"LOW", "MEDIUM", "HIGH", "CRITICAL", "REVIEW"}
+ALLOWED_CATEGORIES = {
+    "TARGET_ACHIEVED",
+    "NEAR_TARGET",
+    "AT_RISK",
+    "HIGH_RISK",
+    "CRITICAL",
+    "NO_FORECAST_DATA",
+}
 REQUIRED = {
     "REGION": ("entity_code", "ai_insight_category", "ai_diagnosis", "triggered_action_plan", "priority"),
     "GM": ("gm_code", "ai_insight_category", "ai_diagnosis", "triggered_action_plan", "priority"),
@@ -77,11 +85,13 @@ SUPPORTING CONTEXT (use only for CEO/GM attention prioritization; never recomput
 {support}
 
 OUTPUT:
-{json.dumps({identity: row.get(identity, "CEO"), "ai_insight_category": "<CATEGORY>", "ai_diagnosis": "<DIAGNOSIS>", "triggered_action_plan": "<ACTION>", "priority": row.get("priority")}, ensure_ascii=False)}
+{json.dumps({identity: row.get(identity, "CEO"), "ai_insight_category": row.get("performance_scenario", "NO_FORECAST_DATA"), "ai_diagnosis": "<DIAGNOSIS>", "triggered_action_plan": "<ACTION>", "priority": row.get("priority")}, ensure_ascii=False)}
 
 FIELD RULES:
 - {identity} must exactly equal the supplied identity.
-- ai_insight_category is a concise classification, not a replacement for performance_scenario or forecast_scenario.
+- ai_insight_category MUST exactly equal performance_scenario from the authoritative input.
+- Allowed ai_insight_category values are exactly: TARGET_ACHIEVED, NEAR_TARGET, AT_RISK, HIGH_RISK, CRITICAL, NO_FORECAST_DATA.
+- ai_insight_category is a controlled classification, not a replacement for performance_scenario or forecast_scenario.
 - priority must exactly equal the supplied priority. Allowed values are LOW, MEDIUM, HIGH, CRITICAL, or REVIEW.
 - ai_diagnosis: max 2 short Indonesian sentences; describe supplied forecast status, gap/risk,
   uncertainty/model-spread signal when material, and management implication. Do not invent causes.
@@ -130,6 +140,13 @@ def validate(row: dict[str, Any], insight: dict[str, Any]) -> dict[str, Any]:
     expected_identity = row["entity_code"] if level != "CEO" else "CEO"
     if insight[identity] != expected_identity:
         raise RuntimeError(f"Hermes changed {identity}: expected {expected_identity}, got {insight[identity]}")
+    category = str(insight["ai_insight_category"]).strip().upper()
+    expected_category = str(row.get("performance_scenario") or "NO_FORECAST_DATA").strip().upper()
+    if category not in ALLOWED_CATEGORIES:
+        raise RuntimeError(f"Hermes returned invalid ai_insight_category: {insight['ai_insight_category']}")
+    if category != expected_category:
+        raise RuntimeError(f"Hermes changed ai_insight_category for {expected_identity}: expected {expected_category}, got {category}")
+    insight["ai_insight_category"] = category
     returned_priority = str(insight["priority"]).strip().upper()
     expected_priority = str(row["priority"]).strip().upper()
     if returned_priority != expected_priority:
