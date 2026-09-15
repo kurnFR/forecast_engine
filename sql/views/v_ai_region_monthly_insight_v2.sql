@@ -3,9 +3,21 @@
 -- Target source: dwh_prod.mv_ai_region_monthly (already embedded in forecast output)
 -- This replaces the old daily-rate/momentum forecast interpretation with
 -- the statistical P50 forecast and its P10/P90 uncertainty bounds.
+--
+-- Data-quality rule: only exactly one active hierarchy row may map a region.
+-- Ambiguous active mappings are deliberately excluded instead of being
+-- allowed to fan out forecast rows.
 
 CREATE OR REPLACE VIEW dwh_prod.v_ai_region_monthly_insight_v2 AS
-WITH base AS (
+WITH active_hierarchy AS (
+    SELECT
+        regioncode,
+        MAX(regionname) AS regionname
+    FROM dwh_prod.m_sales_org_hierarchy
+    WHERE is_active = TRUE
+    GROUP BY regioncode
+    HAVING COUNT(*) = 1
+), base AS (
     SELECT
         f.periode,
         f.regioncode,
@@ -34,13 +46,13 @@ WITH base AS (
             2
         ) AS current_achievement_pct
     FROM dwh_prod.forecast_sellin_eom f
-    LEFT JOIN dwh_prod.m_sales_org_hierarchy h
+    LEFT JOIN active_hierarchy h
         ON f.regioncode = h.regioncode
-       AND h.is_active = TRUE
 ), classified AS (
     SELECT
         b.*,
         CASE
+            WHEN b.achievement_pct_forecast IS NULL THEN 'NO_FORECAST_DATA'
             WHEN b.achievement_pct_forecast >= 100 THEN 'TARGET_ACHIEVED'
             WHEN b.achievement_pct_forecast >= 90 THEN 'NEAR_TARGET'
             WHEN b.achievement_pct_forecast >= 70 THEN 'AT_RISK'
@@ -48,6 +60,8 @@ WITH base AS (
             ELSE 'CRITICAL'
         END AS performance_scenario,
         CASE
+            WHEN b.forecast_p10 IS NULL OR b.forecast_p50 IS NULL OR b.forecast_p90 IS NULL
+                OR b.target_sellin IS NULL THEN 'NO_FORECAST_DATA'
             WHEN b.forecast_p10 >= b.target_sellin
                 THEN 'HIGH_CONFIDENCE_ABOVE_TARGET'
             WHEN b.forecast_p90 < b.target_sellin
@@ -84,10 +98,12 @@ SELECT
         WHEN c.performance_scenario = 'NEAR_TARGET' THEN 'Near Target'
         WHEN c.performance_scenario = 'AT_RISK' THEN 'At Risk'
         WHEN c.performance_scenario = 'HIGH_RISK' THEN 'High Risk'
+        WHEN c.performance_scenario = 'NO_FORECAST_DATA' THEN 'No Forecast Data'
         ELSE 'Critical'
     END AS performance_scenario_name,
     c.forecast_scenario,
     CASE
+        WHEN c.performance_scenario = 'NO_FORECAST_DATA' THEN 'REVIEW'
         WHEN c.achievement_pct_forecast < 50 THEN 'CRITICAL'
         WHEN c.achievement_pct_forecast < 70 THEN 'HIGH'
         WHEN c.achievement_pct_forecast < 90 THEN 'MEDIUM'

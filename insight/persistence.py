@@ -56,8 +56,20 @@ def persist(results: list[dict[str, Any]]) -> None:
                 """), {"p":period,"c":row["entity_code"],"cat":insight["ai_insight_category"],"diag":insight["ai_diagnosis"],"action":insight["triggered_action_plan"],"pri":row["priority"],"model":"hermes-bi-insight","prompt":"v2-forecast","target":row["target_sellin"],"actual":row["mtd_actual"],"p10":row["forecast_p10"],"p50":row["forecast_p50"],"p90":row["forecast_p90"],"ach":row["achievement_pct_forecast"],"gap":row["forecast_gap_to_target"],"unc":row["forecast_uncertainty_pct"],"ps":row["performance_scenario"],"fs":row["forecast_scenario"],"spread":row["model_spread"],"spreadpct":row["model_spread_pct_p50"],"shortfall":row["forecast_shortfall"],"contrib":row["shortfall_contribution_pct"],"lr":row["largest_shortfall_regioncode"],"lrn":row["largest_shortfall_regionname"],"ls":row["largest_region_shortfall"],"lsp":row["largest_region_shortfall_pct"],"v2cat":insight["ai_insight_category"]})
             else:
                 conn.execute(text("UPDATE dwh_prod.ai_insight SET is_active=0 WHERE insight_type='CEO_SALES_SUMMARY' AND is_active=1"))
+                # Replace NaN/Infinity with None, convert date/datetime to string for valid JSON
+                import math
+                from datetime import date, datetime
+                def sanitize_value(obj):
+                    if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+                        return None
+                    if isinstance(obj, (date, datetime)):
+                        return obj.isoformat()
+                    return obj
+                
+                snapshot_data = {k: sanitize_value(v) for k, v in row.items()}
+                
                 conn.execute(text("""
                     INSERT INTO dwh_prod.ai_insight
                     ("period", insight_type, description, ai_summary, is_active, v2_snapshot, model_name, prompt_version)
                     VALUES (:p,'CEO_SALES_SUMMARY',:description,:summary,1,:snapshot,:model,:prompt)
-                """), {"p":period,"description":json.dumps(insight,ensure_ascii=False),"summary":f"{insight['ai_diagnosis']} {insight['triggered_action_plan']}","snapshot":json.dumps(row,ensure_ascii=False,default=str),"model":"hermes-bi-insight","prompt":"v2-forecast"})
+                """), {"p":period,"description":json.dumps(insight,ensure_ascii=False),"summary":f"{insight['ai_diagnosis']} {insight['triggered_action_plan']}","snapshot":json.dumps(snapshot_data,ensure_ascii=False),"model":"hermes-bi-insight","prompt":"v2-forecast"})

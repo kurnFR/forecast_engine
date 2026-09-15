@@ -1,12 +1,27 @@
 -- V2 GM monthly business diagnostics
 -- Deterministic management facts derived from regional V2 diagnostics.
 -- No second forecasting model and no daily-rate forecast.
--- Aggregate P10/P90 use quadrature of regional half-widths as an explicit
--- diversification approximation; they are not claimed to be native calibrated
--- GM-level quantiles until correlated OOS aggregation is implemented.
+--
+-- GM P50 is the sum of regional P50 forecasts.
+-- GM P10/P90 are NOT sums of regional quantiles. They are reconstructed
+-- from regional 10-90 widths using a normal/independence approximation:
+--   sigma_i ~= (P90_i - P10_i) / (2 * z90)
+--   sigma_GM = sqrt(sum(sigma_i^2))
+--   GM P10/P90 = GM P50 +/- z90 * sigma_GM
+-- This is an interim aggregate uncertainty method and must be validated
+-- with GM-level historical backtesting before production sign-off.
 
 CREATE OR REPLACE VIEW dwh_prod.v_ai_gm_monthly_diagnostics_v2 AS
-WITH base AS (
+WITH active_hierarchy AS (
+    SELECT
+        regioncode,
+        MAX(gm_code) AS gm_code,
+        MAX(gm_name) AS gm_name
+    FROM dwh_prod.m_sales_org_hierarchy
+    WHERE is_active = TRUE
+    GROUP BY regioncode
+    HAVING COUNT(*) = 1
+), base AS (
     SELECT
         r.periode,
         h.gm_code,
@@ -30,11 +45,17 @@ WITH base AS (
         r.priority,
         r.model_spread,
         r.model_spread_pct_p50,
-        r.forecast_shortfall
+        r.forecast_shortfall,
+        CASE
+            WHEN r.forecast_p10 IS NOT NULL
+             AND r.forecast_p90 IS NOT NULL
+             AND r.forecast_p90 >= r.forecast_p10
+            THEN (r.forecast_p90 - r.forecast_p10) / (2.0 * 1.2815515655446)
+            ELSE NULL
+        END AS regional_sigma
     FROM dwh_prod.v_ai_region_monthly_diagnostics_v2 r
-    JOIN dwh_prod.m_sales_org_hierarchy h
+    JOIN active_hierarchy h
       ON r.regioncode = h.regioncode
-     AND h.is_active = TRUE
 ), aggregated AS (
     SELECT
         periode,
@@ -48,26 +69,19 @@ WITH base AS (
         SUM(forecast_sarima) AS forecast_sarima,
         SUM(forecast_xgboost) AS forecast_xgboost,
         SUM(forecast_p50) AS forecast_p50,
-        SUM(
-            POWER(GREATEST(forecast_p50 - forecast_p10, 0), 2)
-        ) AS lower_half_width_sq_sum,
-        SUM(
-            POWER(GREATEST(forecast_p90 - forecast_p50, 0), 2)
-        ) AS upper_half_width_sq_sum,
+        GREATEST(
+            SUM(forecast_p50)
+            - 1.2815515655446 * SQRT(SUM(POWER(regional_sigma, 2))),
+            0
+        ) AS forecast_p10,
+        SUM(forecast_p50)
+            + 1.2815515655446 * SQRT(SUM(POWER(regional_sigma, 2)))
+            AS forecast_p90,
         SUM(forecast_shortfall) AS forecast_shortfall,
         MAX(model_spread) AS max_region_model_spread,
         MAX(model_spread_pct_p50) AS max_region_model_spread_pct_p50
     FROM base
     GROUP BY periode, gm_code, gm_name
-), intervalled AS (
-    SELECT
-        a.*,
-        GREATEST(
-            a.forecast_p50 - SQRT(a.lower_half_width_sq_sum),
-            0
-        ) AS forecast_p10,
-        a.forecast_p50 + SQRT(a.upper_half_width_sq_sum) AS forecast_p90
-    FROM aggregated a
 ), ranked_regions AS (
     SELECT
         b.*,
@@ -103,28 +117,26 @@ SELECT
         2
     ) AS forecast_uncertainty_pct,
     CASE
-        WHEN a.forecast_p50 IS NULL OR a.target_sellin IS NULL
-            OR a.target_sellin = 0 THEN 'NO_FORECAST_DATA'
-        WHEN a.forecast_p50 / a.target_sellin * 100 >= 100 THEN 'TARGET_ACHIEVED'
-        WHEN a.forecast_p50 / a.target_sellin * 100 >= 90 THEN 'NEAR_TARGET'
-        WHEN a.forecast_p50 / a.target_sellin * 100 >= 70 THEN 'AT_RISK'
-        WHEN a.forecast_p50 / a.target_sellin * 100 >= 50 THEN 'HIGH_RISK'
+        WHEN a.forecast_p50 IS NULL OR a.target_sellin IS NULL THEN 'NO_FORECAST_DATA'
+        WHEN a.forecast_p50 / NULLIF(a.target_sellin, 0) * 100 >= 100 THEN 'TARGET_ACHIEVED'
+        WHEN a.forecast_p50 / NULLIF(a.target_sellin, 0) * 100 >= 90 THEN 'NEAR_TARGET'
+        WHEN a.forecast_p50 / NULLIF(a.target_sellin, 0) * 100 >= 70 THEN 'AT_RISK'
+        WHEN a.forecast_p50 / NULLIF(a.target_sellin, 0) * 100 >= 50 THEN 'HIGH_RISK'
         ELSE 'CRITICAL'
     END AS performance_scenario,
     CASE
-        WHEN a.forecast_p50 IS NULL OR a.target_sellin IS NULL
-            OR a.target_sellin = 0 THEN 'NO_FORECAST_DATA'
+        WHEN a.forecast_p10 IS NULL OR a.forecast_p50 IS NULL OR a.forecast_p90 IS NULL
+            OR a.target_sellin IS NULL THEN 'NO_FORECAST_DATA'
         WHEN a.forecast_p10 >= a.target_sellin THEN 'HIGH_CONFIDENCE_ABOVE_TARGET'
         WHEN a.forecast_p90 < a.target_sellin THEN 'HIGH_CONFIDENCE_BELOW_TARGET'
         WHEN a.forecast_p50 >= a.target_sellin THEN 'P50_ABOVE_TARGET_BUT_UNCERTAIN'
         ELSE 'P50_BELOW_TARGET_BUT_UNCERTAIN'
     END AS forecast_scenario,
     CASE
-        WHEN a.forecast_p50 IS NULL OR a.target_sellin IS NULL
-            OR a.target_sellin = 0 THEN 'REVIEW'
-        WHEN a.forecast_p50 / a.target_sellin * 100 < 50 THEN 'CRITICAL'
-        WHEN a.forecast_p50 / a.target_sellin * 100 < 70 THEN 'HIGH'
-        WHEN a.forecast_p50 / a.target_sellin * 100 < 90 THEN 'MEDIUM'
+        WHEN a.forecast_p50 IS NULL OR a.target_sellin IS NULL THEN 'REVIEW'
+        WHEN a.forecast_p50 / NULLIF(a.target_sellin, 0) * 100 < 50 THEN 'CRITICAL'
+        WHEN a.forecast_p50 / NULLIF(a.target_sellin, 0) * 100 < 70 THEN 'HIGH'
+        WHEN a.forecast_p50 / NULLIF(a.target_sellin, 0) * 100 < 90 THEN 'MEDIUM'
         ELSE 'LOW'
     END AS priority,
     ROUND(a.forecast_shortfall, 0) AS forecast_shortfall,
@@ -143,7 +155,7 @@ SELECT
         rr.forecast_shortfall / NULLIF(a.forecast_shortfall, 0) * 100,
         2
     ) AS largest_region_shortfall_pct_gm
-FROM intervalled a
+FROM aggregated a
 LEFT JOIN ranked_regions rr
   ON a.periode = rr.periode
  AND a.gm_code = rr.gm_code
