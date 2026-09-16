@@ -1,4 +1,5 @@
 """Batch entry point for Region -> GM -> CEO V2 insight generation."""
+from __future__ import annotations
 import argparse
 import logging
 

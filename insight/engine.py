@@ -5,6 +5,8 @@ narrative fields; validation rejects identity, category, priority, or shape
 changes. The implementation intentionally reuses the old bi-insight-agent
 Hermes subprocess/retry/JSON pattern without its V1 forecasting inputs.
 """
+from __future__ import annotations
+
 import json
 import os
 import re

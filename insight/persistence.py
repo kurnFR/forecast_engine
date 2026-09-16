@@ -5,6 +5,7 @@ for backward-compatible identity/status fields and are populated from the same
 V2 scenario/priority values where semantics remain compatible. Obsolete V1
 momentum and daily-rate fields are intentionally not written.
 """
+from __future__ import annotations
 import json
 from typing import Any
 
