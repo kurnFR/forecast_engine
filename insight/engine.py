@@ -92,6 +92,7 @@ OUTPUT:
 FIELD RULES:
 - {identity} must exactly equal the supplied identity.
 - ai_insight_category MUST exactly equal performance_scenario from the authoritative input.
+- Allowed ai_insight_category values: TARGET_ACHIEVED, NEAR_TARGET, AT_RISK, HIGH_RISK, CRITICAL, NO_FORECAST_DATA.
 - priority must exactly equal the supplied priority.
 - ai_diagnosis: max 2 short Indonesian sentences; describe supplied forecast status, gap/risk,
   uncertainty/model-spread signal when material, and management implication. Do not invent causes.
@@ -156,7 +157,9 @@ def _validate_narrative_text(row: dict[str, Any], field: str, value: str) -> Non
     max_sentences = 2 if field == "ai_diagnosis" else 1
     if _sentence_count(value) > max_sentences:
         raise RuntimeError(f"Hermes returned too many sentences in {field}")
-    numbers = re.findall(r"(?<![A-Za-z])\d+(?:[.,]\d+)?%?", value)
+    # Match numbers only when they are not part of an identifier/alphanumeric token.
+    # This prevents the trailing '0' in 'P50' from being treated as a new number.
+    numbers = re.findall(r"(?<![A-Za-z0-9])\d+(?:[.,]\d+)?%?", value)
     allowed = _authoritative_numbers(row)
     for number in numbers:
         normalized = number.replace(",", ".").rstrip("%")
