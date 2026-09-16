@@ -32,8 +32,8 @@ def valid_insight(row, identity=None, priority=None, category=None):
     expected = "CEO" if level == "CEO" else row[key]
     return {key: identity if identity is not None else expected,
             "ai_insight_category": category if category is not None else row["performance_scenario"],
-            "ai_diagnosis": "Forecast P50 berada di bawah target dan masih berisiko.",
-            "triggered_action_plan": "Pantau realisasi sell-in dan fokus pada percepatan eksekusi.",
+            "ai_diagnosis": "Forecast masih di bawah target dan risiko pencapaian perlu diperhatikan.",
+            "triggered_action_plan": "Fokuskan percepatan eksekusi sell-in pada area prioritas.",
             "priority": priority if priority is not None else row["priority"]}
 
 
@@ -54,13 +54,23 @@ def test_prompt_requires_indonesian_single_action_and_fact_based_narrative():
     assert "Diagnosis and action MUST be Indonesian" in prompt
     assert "Diagnosis must explain the supplied forecast situation" in prompt
     assert "Use at most one management response/action" in prompt
-    assert "Do not introduce numeric values unless they appear in the authoritative input" in prompt
+    assert "Narrative fields are QUALITATIVE ONLY" in prompt
+
+
+def test_prompt_exposes_no_raw_numeric_metric_fields():
+    prompt = build_prompt(base())
+    for field in (
+        "target_sellin", "mtd_actual", "forecast_p10", "forecast_p50", "forecast_p90",
+        "achievement_pct_forecast", "forecast_gap_to_target", "forecast_uncertainty_pct",
+        "model_spread", "model_spread_pct_p50", "forecast_shortfall",
+    ):
+        assert field not in prompt
 
 
 def test_gm_prompt_uses_gm_identity_and_preserves_priority():
     prompt = build_prompt(base("GM"))
     assert "LEVEL: GM" in prompt
-    assert '"gm_code":"GM-COMJAWA"' in prompt
+    assert '"identity":"GM-COMJAWA"' in prompt
     assert '"priority":"MEDIUM"' in prompt
 
 
@@ -159,22 +169,23 @@ def test_review_priority_is_normalized_to_uppercase():
 def test_validation_rejects_unsupported_numeric_value():
     row = base()
     insight = valid_insight(row)
-    insight["ai_diagnosis"] = "Forecast P50 diperkirakan 99% dari target dan masih berisiko."
+    insight["ai_diagnosis"] = "Forecast diperkirakan 99% dari target dan masih berisiko."
     with pytest.raises(RuntimeError, match="unsupported number"):
         validate(row, insight)
 
 
-def test_validation_accepts_authoritative_numeric_value():
+def test_validation_rejects_numeric_value_even_when_authoritative():
     row = base()
     insight = valid_insight(row)
-    insight["ai_diagnosis"] = "Achievement forecast tercatat 87.7186% dan P50 masih di bawah target."
-    assert validate(row, insight)["ai_diagnosis"] == insight["ai_diagnosis"]
+    insight["ai_diagnosis"] = "Achievement forecast tercatat 87.7186% dan posisi masih berisiko."
+    with pytest.raises(RuntimeError, match="unsupported number"):
+        validate(row, insight)
 
 
 def test_validation_rejects_unsupported_cause():
     row = base()
     insight = valid_insight(row)
-    insight["ai_diagnosis"] = "Forecast P50 berada di bawah target karena stok distributor kurang."
+    insight["ai_diagnosis"] = "Forecast berada di bawah target karena stok distributor kurang."
     with pytest.raises(RuntimeError, match="unsupported cause"):
         validate(row, insight)
 
@@ -182,7 +193,7 @@ def test_validation_rejects_unsupported_cause():
 def test_validation_accepts_non_causal_diagnosis():
     row = base()
     insight = valid_insight(row)
-    insight["ai_diagnosis"] = "Forecast P50 berada di bawah target dengan ketidakpastian model yang material."
+    insight["ai_diagnosis"] = "Forecast berada di bawah target dengan ketidakpastian model yang material."
     assert validate(row, insight)["ai_diagnosis"] == insight["ai_diagnosis"]
 
 
@@ -212,7 +223,7 @@ def test_validation_rejects_english_narrative():
 def test_validation_rejects_more_than_two_diagnosis_sentences():
     row = base()
     insight = valid_insight(row)
-    insight["ai_diagnosis"] = "Forecast P50 berada di bawah target. Risiko masih material. Fokus pada eksekusi."
+    insight["ai_diagnosis"] = "Forecast berada di bawah target. Risiko masih material. Fokus pada eksekusi."
     with pytest.raises(RuntimeError, match="too many sentences"):
         validate(row, insight)
 
