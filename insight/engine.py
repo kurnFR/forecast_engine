@@ -19,29 +19,18 @@ VIEW = "dwh_prod.v_ai_forecast_insight_input_v2"
 MODEL_NAME = os.getenv("INSIGHT_MODEL_NAME", "hermes-bi-insight")
 PROMPT_VERSION = "v2-forecast"
 ALLOWED_PRIORITIES = {"LOW", "MEDIUM", "HIGH", "CRITICAL", "REVIEW"}
-ALLOWED_CATEGORIES = {
-    "TARGET_ACHIEVED", "NEAR_TARGET", "AT_RISK", "HIGH_RISK", "CRITICAL", "NO_FORECAST_DATA"
-}
+ALLOWED_CATEGORIES = {"TARGET_ACHIEVED", "NEAR_TARGET", "AT_RISK", "HIGH_RISK", "CRITICAL", "NO_FORECAST_DATA"}
 REQUIRED = {
     "REGION": ("entity_code", "ai_insight_category", "ai_diagnosis", "triggered_action_plan", "priority"),
     "GM": ("gm_code", "ai_insight_category", "ai_diagnosis", "triggered_action_plan", "priority"),
     "CEO": ("insight_level", "ai_insight_category", "ai_diagnosis", "triggered_action_plan", "priority"),
 }
 
-# Conservative lexical guardrails: they catch common hallucinated causes without
-# pretending to perform full natural-language fact checking.
-CAUSE_PATTERNS = re.compile(
-    r"\b(?:karena|disebabkan|penyebab(?:nya)?|akibat|dipicu|terkendala|kendala)\b",
-    re.IGNORECASE,
-)
-MULTI_ACTION_PATTERNS = re.compile(
-    r"\b(?:dan kemudian|kemudian|selanjutnya|lalu)\b|;|\b(?:serta|dan)\s+(?:pastikan|lakukan|tingkatkan|evaluasi|koordinasikan|percepat|fokuskan)\b",
-    re.IGNORECASE,
-)
-ENGLISH_MARKERS = re.compile(
-    r"\b(?:the|forecast|target|actual|risk|action|monitor|focus|ensure|increase|decrease|performance|below|above|because|due|shortfall|uncertainty)\b",
-    re.IGNORECASE,
-)
+CAUSE_PATTERNS = re.compile(r"\b(?:karena|disebabkan|penyebab(?:nya)?|akibat|dipicu|terkendala|kendala)\b", re.IGNORECASE)
+MULTI_ACTION_PATTERNS = re.compile(r"\b(?:dan kemudian|kemudian|selanjutnya|lalu)\b|;|\b(?:serta|dan)\s+(?:pastikan|lakukan|tingkatkan|evaluasi|koordinasikan|percepat|fokuskan)\b", re.IGNORECASE)
+# Common English connective/action terms only. Standard Indonesian BI terms such as
+# forecast, target, risk, performance, and uncertainty are intentionally allowed.
+ENGLISH_MARKERS = re.compile(r"\b(?:the|actual|action|monitor|focus|ensure|increase|decrease|below|above|because|due|shortfall)\b", re.IGNORECASE)
 
 
 def _jsonable(row: dict[str, Any]) -> dict[str, Any]:
@@ -145,11 +134,10 @@ def run_hermes(prompt: str, attempts: int = 2) -> dict[str, Any]:
 def _authoritative_numbers(row: dict[str, Any]) -> set[str]:
     values: set[str] = set()
     for key, value in row.items():
-        if value is None or key in {"periode"}:
+        if value is None or key == "periode":
             continue
         if isinstance(value, (int, float)) and not isinstance(value, bool):
-            values.add(str(value))
-            values.add(str(round(float(value), 2)))
+            values.add(str(value)); values.add(str(round(float(value), 2)))
             values.add(str(int(value)) if float(value).is_integer() else str(value))
     return values
 
