@@ -49,6 +49,14 @@ def test_prompt_requires_controlled_category():
     assert "TARGET_ACHIEVED, NEAR_TARGET, AT_RISK, HIGH_RISK, CRITICAL, NO_FORECAST_DATA" in prompt
 
 
+def test_prompt_requires_indonesian_single_action_and_fact_based_narrative():
+    prompt = build_prompt(base())
+    assert "Diagnosis and action MUST be Indonesian" in prompt
+    assert "Diagnosis must explain the supplied forecast situation" in prompt
+    assert "Use at most one management response/action" in prompt
+    assert "Do not introduce numeric values unless they appear in the authoritative input" in prompt
+
+
 def test_gm_prompt_uses_gm_identity_and_preserves_priority():
     prompt = build_prompt(base("GM"))
     assert "LEVEL: GM" in prompt
@@ -146,3 +154,56 @@ def test_prompt_contains_no_v1_daily_rate_input_fields():
 def test_review_priority_is_normalized_to_uppercase():
     row = base(); row["priority"] = "review"; insight = valid_insight(row, priority="review")
     assert validate(row, insight)["priority"] == "REVIEW"
+
+
+def test_validation_rejects_unsupported_numeric_value():
+    row = base()
+    insight = valid_insight(row)
+    insight["ai_diagnosis"] = "Forecast P50 diperkirakan 99% dari target dan masih berisiko."
+    with pytest.raises(RuntimeError, match="unsupported number"):
+        validate(row, insight)
+
+
+def test_validation_accepts_authoritative_numeric_value():
+    row = base()
+    insight = valid_insight(row)
+    insight["ai_diagnosis"] = "Achievement forecast tercatat 87.7186% dan P50 masih di bawah target."
+    assert validate(row, insight)["ai_diagnosis"] == insight["ai_diagnosis"]
+
+
+def test_validation_rejects_unsupported_cause():
+    row = base()
+    insight = valid_insight(row)
+    insight["ai_diagnosis"] = "Forecast P50 berada di bawah target karena stok distributor kurang."
+    with pytest.raises(RuntimeError, match="unsupported cause"):
+        validate(row, insight)
+
+
+def test_validation_accepts_non_causal_diagnosis():
+    row = base()
+    insight = valid_insight(row)
+    insight["ai_diagnosis"] = "Forecast P50 berada di bawah target dengan ketidakpastian model yang material."
+    assert validate(row, insight)["ai_diagnosis"] == insight["ai_diagnosis"]
+
+
+def test_validation_rejects_multiple_management_actions():
+    row = base()
+    insight = valid_insight(row)
+    insight["triggered_action_plan"] = "Percepat eksekusi sell-in dan kemudian evaluasi distributor."
+    with pytest.raises(RuntimeError, match="multiple management actions"):
+        validate(row, insight)
+
+
+def test_validation_accepts_one_management_action_with_compound_objective():
+    row = base()
+    insight = valid_insight(row)
+    insight["triggered_action_plan"] = "Fokuskan percepatan eksekusi sell-in pada area dengan gap terbesar."
+    assert validate(row, insight)["triggered_action_plan"] == insight["triggered_action_plan"]
+
+
+def test_validation_rejects_english_narrative():
+    row = base()
+    insight = valid_insight(row)
+    insight["ai_diagnosis"] = "The forecast is below target and risk remains high."
+    with pytest.raises(RuntimeError, match="non-Indonesian"):
+        validate(row, insight)
