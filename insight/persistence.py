@@ -6,11 +6,38 @@ V2 scenario/priority values where semantics remain compatible. Obsolete V1
 momentum and daily-rate fields are intentionally not written.
 """
 from __future__ import annotations
+
 import json
+import math
+from numbers import Real
 from typing import Any
 
 from db import get_engine
 from sqlalchemy import text
+
+
+def _json_safe(value: Any) -> Any:
+    """Convert non-finite numeric values to JSON null recursively.
+
+    SQLAlchemy/PostgreSQL JSON rejects bare NaN/Infinity tokens. The diagnostic
+    view can legitimately contain NULL-like values that arrive in Python as
+    NaN, so normalize them before persisting the authoritative snapshot.
+    """
+    if isinstance(value, Real) and not isinstance(value, bool):
+        numeric = float(value)
+        if not math.isfinite(numeric):
+            return None
+        return value
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
+def _json_dumps(value: Any) -> str:
+    """Serialize values as strict JSON accepted by PostgreSQL."""
+    return json.dumps(_json_safe(value), ensure_ascii=False, allow_nan=False, default=str)
 
 
 def persist(results: list[dict[str, Any]]) -> None:
@@ -205,9 +232,9 @@ def persist(results: list[dict[str, Any]]) -> None:
                     """),
                     {
                         "p": period,
-                        "description": json.dumps(insight, ensure_ascii=False),
+                        "description": _json_dumps(insight),
                         "summary": f"{insight['ai_diagnosis']} {insight['triggered_action_plan']}",
-                        "snapshot": json.dumps(row, ensure_ascii=False, default=str),
+                        "snapshot": _json_dumps(row),
                         "model": "hermes-bi-insight",
                         "prompt": "v2-forecast",
                     },
