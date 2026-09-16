@@ -1,9 +1,8 @@
 """Hermes V2 insight engine.
 
 The SQL view is the sole source of deterministic facts. Hermes only writes
-narrative fields; validation rejects identity, category, priority, or shape
-changes. The implementation intentionally reuses the old bi-insight-agent
-Hermes subprocess/retry/JSON pattern without its V1 forecasting inputs.
+narrative fields; validation rejects identity, category, priority, unsupported
+numbers/causes, non-Indonesian output, or multi-action plans.
 """
 from __future__ import annotations
 
@@ -21,18 +20,28 @@ MODEL_NAME = os.getenv("INSIGHT_MODEL_NAME", "hermes-bi-insight")
 PROMPT_VERSION = "v2-forecast"
 ALLOWED_PRIORITIES = {"LOW", "MEDIUM", "HIGH", "CRITICAL", "REVIEW"}
 ALLOWED_CATEGORIES = {
-    "TARGET_ACHIEVED",
-    "NEAR_TARGET",
-    "AT_RISK",
-    "HIGH_RISK",
-    "CRITICAL",
-    "NO_FORECAST_DATA",
+    "TARGET_ACHIEVED", "NEAR_TARGET", "AT_RISK", "HIGH_RISK", "CRITICAL", "NO_FORECAST_DATA"
 }
 REQUIRED = {
     "REGION": ("entity_code", "ai_insight_category", "ai_diagnosis", "triggered_action_plan", "priority"),
     "GM": ("gm_code", "ai_insight_category", "ai_diagnosis", "triggered_action_plan", "priority"),
     "CEO": ("insight_level", "ai_insight_category", "ai_diagnosis", "triggered_action_plan", "priority"),
 }
+
+# Conservative lexical guardrails: they catch common hallucinated causes without
+# pretending to perform full natural-language fact checking.
+CAUSE_PATTERNS = re.compile(
+    r"\b(?:karena|disebabkan|penyebab(?:nya)?|akibat|dipicu|terkendala|kendala)\b",
+    re.IGNORECASE,
+)
+MULTI_ACTION_PATTERNS = re.compile(
+    r"\b(?:dan kemudian|kemudian|selanjutnya|lalu)\b|;|\b(?:serta|dan)\s+(?:pastikan|lakukan|tingkatkan|evaluasi|koordinasikan|percepat|fokuskan)\b",
+    re.IGNORECASE,
+)
+ENGLISH_MARKERS = re.compile(
+    r"\b(?:the|forecast|target|actual|risk|action|monitor|focus|ensure|increase|decrease|performance|below|above|because|due|shortfall|uncertainty)\b",
+    re.IGNORECASE,
+)
 
 
 def _jsonable(row: dict[str, Any]) -> dict[str, Any]:
@@ -77,6 +86,8 @@ HARD RULES:
 - Never use daily-rate or momentum forecasting logic.
 - {_period_context(row)}
 - Diagnosis and action MUST be Indonesian and executive-ready.
+- Diagnosis must explain the supplied forecast situation, not merely say to monitor it.
+- Use at most one management response/action; do not combine multiple actions.
 - Return ONLY one JSON object, with exactly five fields.
 
 LEVEL: {level}
@@ -87,17 +98,17 @@ SUPPORTING CONTEXT (use only for CEO/GM attention prioritization; never recomput
 {support}
 
 OUTPUT:
-{json.dumps({identity: row.get(identity, "CEO"), "ai_insight_category": row.get("performance_scenario", "NO_FORECAST_DATA"), "ai_diagnosis": "<DIAGNOSIS>", "triggered_action_plan": "<ACTION>", "priority": row.get("priority")}, ensure_ascii=False)}
+{json.dumps({identity: row.get(identity, "CEO"), "ai_insight_category": row.get("performance_scenario", "NO_FORECAST_DATA"), "ai_diagnosis": "<DIAGNOSIS>", "triggered_action_plan": "<ONE ACTION>", "priority": row.get("priority")}, ensure_ascii=False)}
 
 FIELD RULES:
 - {identity} must exactly equal the supplied identity.
 - ai_insight_category MUST exactly equal performance_scenario from the authoritative input.
-- Allowed ai_insight_category values are exactly: TARGET_ACHIEVED, NEAR_TARGET, AT_RISK, HIGH_RISK, CRITICAL, NO_FORECAST_DATA.
-- ai_insight_category is a controlled classification, not a replacement for performance_scenario or forecast_scenario.
-- priority must exactly equal the supplied priority. Allowed values are LOW, MEDIUM, HIGH, CRITICAL, or REVIEW.
+- priority must exactly equal the supplied priority.
 - ai_diagnosis: max 2 short Indonesian sentences; describe supplied forecast status, gap/risk,
   uncertainty/model-spread signal when material, and management implication. Do not invent causes.
-- triggered_action_plan: exactly one short Indonesian management action supported by the facts.
+- triggered_action_plan: exactly ONE short Indonesian management action supported by the facts.
+- Do not state a causal explanation unless the authoritative input explicitly supplies that cause.
+- Do not introduce numeric values unless they appear in the authoritative input.
 - If target is missing, say target is not established rather than estimating it.
 - If priority is REVIEW because forecast data is unavailable, focus on data/forecast readiness and do not manufacture a business risk.
 - No Markdown, no code fence, no extra fields, no commentary.
@@ -131,6 +142,35 @@ def run_hermes(prompt: str, attempts: int = 2) -> dict[str, Any]:
     raise RuntimeError(f"Hermes failed after {attempts} attempts: {last}")
 
 
+def _authoritative_numbers(row: dict[str, Any]) -> set[str]:
+    values: set[str] = set()
+    for key, value in row.items():
+        if value is None or key in {"periode"}:
+            continue
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            values.add(str(value))
+            values.add(str(round(float(value), 2)))
+            values.add(str(int(value)) if float(value).is_integer() else str(value))
+    return values
+
+
+def _validate_narrative_text(row: dict[str, Any], field: str, value: str) -> None:
+    if not value.strip():
+        raise RuntimeError(f"Hermes returned invalid field: {field}")
+    if ENGLISH_MARKERS.search(value):
+        raise RuntimeError(f"Hermes returned non-Indonesian narrative: {field}")
+    numbers = re.findall(r"(?<![A-Za-z])\d+(?:[.,]\d+)?%?", value)
+    allowed = _authoritative_numbers(row)
+    for number in numbers:
+        normalized = number.replace(",", ".").rstrip("%")
+        if normalized not in allowed and number.rstrip("%") not in allowed:
+            raise RuntimeError(f"Hermes introduced unsupported number in {field}: {number}")
+    if field == "ai_diagnosis" and CAUSE_PATTERNS.search(value):
+        raise RuntimeError("Hermes introduced an unsupported cause in ai_diagnosis")
+    if field == "triggered_action_plan" and MULTI_ACTION_PATTERNS.search(value):
+        raise RuntimeError("Hermes returned multiple management actions")
+
+
 def validate(row: dict[str, Any], insight: dict[str, Any]) -> dict[str, Any]:
     level = row["hierarchy_level"]
     fields = REQUIRED[level]
@@ -161,6 +201,8 @@ def validate(row: dict[str, Any], insight: dict[str, Any]) -> dict[str, Any]:
         value = str(insight.get(field, "")).strip()
         if not value or value.upper() in placeholders or (value.startswith("<") and value.endswith(">")):
             raise RuntimeError(f"Hermes returned invalid field: {field}")
+        if field in {"ai_diagnosis", "triggered_action_plan"}:
+            _validate_narrative_text(row, field, value)
     return insight
 
 
@@ -193,7 +235,7 @@ class InsightAgent:
                     break
                 except RuntimeError as exc:
                     last_err = exc
-                    prompt += f"\n\nPREVIOUS ATTEMPT FAILED: {exc}\nFix the invalid field(s) and return the exact same JSON shape with real values. No placeholders."
+                    prompt += f"\n\nPREVIOUS ATTEMPT FAILED: {exc}\nFix the invalid field(s) and return the exact same JSON shape with real values. No placeholders. No invented causes, numbers, or multiple actions."
                     time.sleep(3)
             if insight is None:
                 raise RuntimeError(f"Row {row.get('entity_code', row.get('gm_code', '?'))} failed after 3 attempts: {last_err}")
