@@ -52,53 +52,128 @@ def _period_context(row: dict[str, Any]) -> str:
         return "Target belum tersedia; jangan membuat atau mengestimasi target."
     if row.get("performance_scenario") == "NO_FORECAST_DATA":
         return "Forecast belum tersedia; jangan membuat atau mengestimasi forecast atau risiko bisnis."
-    return "Gunakan forecast P50/P10/P90 dan achievement forecast persis seperti diberikan."
+    return "Gunakan status forecast dan sinyal ketidakpastian yang sudah disediakan oleh sistem."
+
+
+def _qualitative_facts(row: dict[str, Any]) -> list[str]:
+    """Build a numeric-free interpretation layer for Hermes.
+
+    Deterministic numeric facts stay in the SQL row and downstream persistence.
+    Hermes receives only qualitative signals derived from already-classified fields.
+    """
+    facts: list[str] = []
+    scenario = str(row.get("performance_scenario") or "NO_FORECAST_DATA").upper()
+    forecast_scenario = str(row.get("forecast_scenario") or "").upper()
+
+    status_map = {
+        "TARGET_ACHIEVED": "Posisi forecast berada pada kondisi pencapaian target.",
+        "NEAR_TARGET": "Posisi forecast mendekati target.",
+        "AT_RISK": "Posisi forecast masih di bawah target dan berada dalam kondisi berisiko.",
+        "HIGH_RISK": "Posisi forecast menunjukkan risiko tinggi terhadap pencapaian target.",
+        "CRITICAL": "Posisi forecast menunjukkan kondisi kritis terhadap pencapaian target.",
+        "NO_FORECAST_DATA": "Forecast belum tersedia untuk penilaian kinerja.",
+    }
+    facts.append(status_map.get(scenario, "Status forecast mengikuti klasifikasi sistem."))
+
+    if scenario != "NO_FORECAST_DATA":
+        scenario_map = {
+            "P50_BELOW_TARGET_BUT_UNCERTAIN": "Forecast berada di bawah target dengan ketidakpastian yang material.",
+            "HIGH_CONFIDENCE_BELOW_TARGET": "Forecast berada di bawah target dengan keyakinan model yang relatif tinggi.",
+            "HIGH_CONFIDENCE_ABOVE_TARGET": "Forecast berada di atas target dengan keyakinan model yang relatif tinggi.",
+        }
+        matched = scenario_map.get(forecast_scenario)
+        if matched:
+            facts.append(matched)
+        elif "UNCERTAIN" in forecast_scenario:
+            facts.append("Forecast memiliki sinyal ketidakpastian yang perlu diperhatikan." )
+        elif "BELOW_TARGET" in forecast_scenario:
+            facts.append("Forecast berada di bawah target berdasarkan klasifikasi sistem.")
+        elif "ABOVE_TARGET" in forecast_scenario:
+            facts.append("Forecast berada di atas target berdasarkan klasifikasi sistem.")
+
+        if row.get("model_spread") not in (None, 0, 0.0):
+            facts.append("Terdapat sinyal perbedaan antar-model yang relevan untuk perhatian manajemen.")
+
+    priority = str(row.get("priority") or "").upper()
+    priority_map = {
+        "CRITICAL": "Prioritas penanganan bersifat kritis.",
+        "HIGH": "Prioritas penanganan tinggi.",
+        "MEDIUM": "Prioritas penanganan memerlukan perhatian manajemen.",
+        "LOW": "Prioritas penanganan dapat dipantau secara rutin.",
+        "REVIEW": "Prioritas penanganan berfokus pada kesiapan data dan forecast.",
+    }
+    if priority in priority_map:
+        facts.append(priority_map[priority])
+
+    return facts
+
+
+def _qualitative_support(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return supporting context without exposing numeric metric fields to Hermes."""
+    result = []
+    for row in rows:
+        identity = row.get("entity_code") or row.get("gm_code") or row.get("insight_level")
+        result.append({
+            "identity": identity,
+            "category": row.get("performance_scenario", "NO_FORECAST_DATA"),
+            "priority": row.get("priority"),
+            "qualitative_facts": _qualitative_facts(row),
+        })
+    return result
 
 
 def build_prompt(row: dict[str, Any], supporting: list[dict[str, Any]] | None = None) -> str:
-    payload = json.dumps(_jsonable(row), ensure_ascii=False, separators=(",", ":"), default=str)
-    support = json.dumps([_jsonable(x) for x in (supporting or [])], ensure_ascii=False, separators=(",", ":"), default=str)
     level = row["hierarchy_level"]
     identity = "entity_code" if level == "REGION" else "gm_code" if level == "GM" else "insight_level"
+    qualitative_input = {
+        "identity": row.get(identity, "CEO"),
+        "category": row.get("performance_scenario", "NO_FORECAST_DATA"),
+        "priority": row.get("priority"),
+        "qualitative_facts": _qualitative_facts(row),
+    }
+    support = _qualitative_support(supporting or [])
     return f"""You are the V2 Sell-In executive BI Insight Agent.
 
-PostgreSQL view dwh_prod.v_ai_forecast_insight_input_v2 is authoritative.
+PostgreSQL view dwh_prod.v_ai_forecast_insight_input_v2 is authoritative for deterministic facts.
 You are an interpreter, NOT a calculator.
 
 HARD RULES:
-- Use only supplied facts.
-- Never recalculate, modify, round, estimate, or invent numeric values.
-- Never change target_sellin, mtd_actual, forecast P10/P50/P90, achievement_pct_forecast,
-  forecast_gap_to_target, uncertainty, performance_scenario, forecast_scenario, priority,
-  shortfall, contribution, or model spread.
+- Use only supplied qualitative facts and classifications.
+- Numeric source facts are intentionally NOT provided to you. Do not ask for them and do not reconstruct them.
+- Never calculate, estimate, infer, or invent any numeric value.
 - Never invent a business/root cause. Model disagreement is a signal only; do not explain why.
 - Never use daily-rate or momentum forecasting logic.
 - {_period_context(row)}
 - Diagnosis and action MUST be Indonesian and executive-ready.
 - Diagnosis must explain the supplied forecast situation, not merely say to monitor it.
 - Use at most one management response/action; do not combine multiple actions.
+- Narrative fields are QUALITATIVE ONLY. Never copy, calculate, transform, abbreviate, or mention
+  any numeric value, percentage, amount, ratio, period number, model value, or numeric token.
+- Do not write number-bearing metrics or model labels such as P50, P10, or P90 in narrative fields.
+- Use qualitative wording such as "masih di bawah target", "mendekati target",
+  "risiko tinggi", "ketidakpastian material", or "memerlukan perhatian manajemen".
 - Return ONLY one JSON object, with exactly five fields.
 
 LEVEL: {level}
-AUTHORITATIVE INPUT:
-{payload}
+QUALITATIVE INPUT ONLY:
+{json.dumps(qualitative_input, ensure_ascii=False, separators=(",", ":"))}
 
-SUPPORTING CONTEXT (use only for CEO/GM attention prioritization; never recompute company metrics):
-{support}
+SUPPORTING CONTEXT (qualitative only; use for CEO/GM attention prioritization):
+{json.dumps(support, ensure_ascii=False, separators=(",", ":"))}
 
 OUTPUT:
 {json.dumps({identity: row.get(identity, "CEO"), "ai_insight_category": row.get("performance_scenario", "NO_FORECAST_DATA"), "ai_diagnosis": "<DIAGNOSIS>", "triggered_action_plan": "<ONE ACTION>", "priority": row.get("priority")}, ensure_ascii=False)}
 
 FIELD RULES:
 - {identity} must exactly equal the supplied identity.
-- ai_insight_category MUST exactly equal performance_scenario from the authoritative input.
+- ai_insight_category MUST exactly equal performance_scenario from the supplied qualitative input.
 - Allowed ai_insight_category values: TARGET_ACHIEVED, NEAR_TARGET, AT_RISK, HIGH_RISK, CRITICAL, NO_FORECAST_DATA.
 - priority must exactly equal the supplied priority.
-- ai_diagnosis: max 2 short Indonesian sentences; describe supplied forecast status, gap/risk,
-  uncertainty/model-spread signal when material, and management implication. Do not invent causes.
-- triggered_action_plan: exactly ONE short Indonesian management action supported by the facts.
+- ai_diagnosis: max 2 short Indonesian sentences; describe forecast status, gap/risk,
+  uncertainty/model-spread signal when material, and management implication using qualitative wording only.
+- triggered_action_plan: exactly ONE short Indonesian management action supported by the qualitative facts.
 - Do not state a causal explanation unless the authoritative input explicitly supplies that cause.
-- Do not introduce numeric values unless they appear in the authoritative input.
+- Do not introduce numeric values in diagnosis or action; authoritative numbers remain in SQL/persistence, not narrative.
 - If target is missing, say target is not established rather than estimating it.
 - If priority is REVIEW because forecast data is unavailable, focus on data/forecast readiness and do not manufacture a business risk.
 - No Markdown, no code fence, no extra fields, no commentary.
@@ -132,20 +207,7 @@ def run_hermes(prompt: str, attempts: int = 2) -> dict[str, Any]:
     raise RuntimeError(f"Hermes failed after {attempts} attempts: {last}")
 
 
-def _authoritative_numbers(row: dict[str, Any]) -> set[str]:
-    values: set[str] = set()
-    for key, value in row.items():
-        if value is None or key == "periode":
-            continue
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            values.add(str(value)); values.add(str(round(float(value), 2)))
-            values.add(str(int(value)) if float(value).is_integer() else str(value))
-    return values
-
-
 def _sentence_count(value: str) -> int:
-    # Count terminal punctuation only when followed by whitespace/end, so decimal
-    # points in authoritative values such as 87.7186% are not treated as sentences.
     return len([part for part in re.split(r"[.!?]+(?=\s|$)", value.strip()) if part.strip()])
 
 
@@ -157,14 +219,11 @@ def _validate_narrative_text(row: dict[str, Any], field: str, value: str) -> Non
     max_sentences = 2 if field == "ai_diagnosis" else 1
     if _sentence_count(value) > max_sentences:
         raise RuntimeError(f"Hermes returned too many sentences in {field}")
-    # Match numbers only when they are not part of an identifier/alphanumeric token.
-    # This prevents the trailing '0' in 'P50' from being treated as a new number.
+    # Narrative text is intentionally numeric-free. All authoritative numbers
+    # remain in the SQL input/view and downstream persistence/dashboard fields.
     numbers = re.findall(r"(?<![A-Za-z0-9])\d+(?:[.,]\d+)?%?", value)
-    allowed = _authoritative_numbers(row)
-    for number in numbers:
-        normalized = number.replace(",", ".").rstrip("%")
-        if normalized not in allowed and number.rstrip("%") not in allowed:
-            raise RuntimeError(f"Hermes introduced unsupported number in {field}: {number}")
+    if numbers:
+        raise RuntimeError(f"Hermes introduced unsupported number in {field}: {numbers[0]}")
     if field == "ai_diagnosis" and CAUSE_PATTERNS.search(value):
         raise RuntimeError("Hermes introduced an unsupported cause in ai_diagnosis")
     if field == "triggered_action_plan" and MULTI_ACTION_PATTERNS.search(value):
