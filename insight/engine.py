@@ -142,11 +142,18 @@ def _authoritative_numbers(row: dict[str, Any]) -> set[str]:
     return values
 
 
+def _sentence_count(value: str) -> int:
+    return len(re.findall(r"[^.!?]+(?:[.!?]+|$)", value.strip()))
+
+
 def _validate_narrative_text(row: dict[str, Any], field: str, value: str) -> None:
     if not value.strip():
         raise RuntimeError(f"Hermes returned invalid field: {field}")
     if ENGLISH_MARKERS.search(value):
         raise RuntimeError(f"Hermes returned non-Indonesian narrative: {field}")
+    max_sentences = 2 if field == "ai_diagnosis" else 1
+    if _sentence_count(value) > max_sentences:
+        raise RuntimeError(f"Hermes returned too many sentences in {field}")
     numbers = re.findall(r"(?<![A-Za-z])\d+(?:[.,]\d+)?%?", value)
     allowed = _authoritative_numbers(row)
     for number in numbers:
@@ -223,7 +230,7 @@ class InsightAgent:
                     break
                 except RuntimeError as exc:
                     last_err = exc
-                    prompt += f"\n\nPREVIOUS ATTEMPT FAILED: {exc}\nFix the invalid field(s) and return the exact same JSON shape with real values. No placeholders. No invented causes, numbers, or multiple actions."
+                    prompt += f"\n\nPREVIOUS ATTEMPT FAILED: {exc}\nFix the invalid field(s) and return the exact same JSON shape with real values. No placeholders. No invented causes, numbers, or multiple actions. Respect sentence limits."
                     time.sleep(3)
             if insight is None:
                 raise RuntimeError(f"Row {row.get('entity_code', row.get('gm_code', '?'))} failed after 3 attempts: {last_err}")
