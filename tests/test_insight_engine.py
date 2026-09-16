@@ -207,3 +207,19 @@ def test_validation_rejects_english_narrative():
     insight["ai_diagnosis"] = "The forecast is below target and risk remains high."
     with pytest.raises(RuntimeError, match="non-Indonesian"):
         validate(row, insight)
+
+
+def test_validation_rejects_more_than_two_diagnosis_sentences():
+    row = base()
+    insight = valid_insight(row)
+    insight["ai_diagnosis"] = "Forecast P50 berada di bawah target. Risiko masih material. Fokus pada eksekusi."
+    with pytest.raises(RuntimeError, match="too many sentences"):
+        validate(row, insight)
+
+
+def test_validation_rejects_multi_sentence_action():
+    row = base()
+    insight = valid_insight(row)
+    insight["triggered_action_plan"] = "Percepat eksekusi sell-in. Evaluasi kembali hasil harian."
+    with pytest.raises(RuntimeError, match="too many sentences"):
+        validate(row, insight)
