@@ -143,7 +143,9 @@ def _authoritative_numbers(row: dict[str, Any]) -> set[str]:
 
 
 def _sentence_count(value: str) -> int:
-    return len(re.findall(r"[^.!?]+(?:[.!?]+|$)", value.strip()))
+    # Count terminal punctuation only when followed by whitespace/end, so decimal
+    # points in authoritative values such as 87.7186% are not treated as sentences.
+    return len([part for part in re.split(r"[.!?]+(?=\s|$)", value.strip()) if part.strip()])
 
 
 def _validate_narrative_text(row: dict[str, Any], field: str, value: str) -> None:
