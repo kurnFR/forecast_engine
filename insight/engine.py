@@ -28,8 +28,6 @@ REQUIRED = {
 
 CAUSE_PATTERNS = re.compile(r"\b(?:karena|disebabkan|penyebab(?:nya)?|akibat|dipicu|terkendala|kendala)\b", re.IGNORECASE)
 MULTI_ACTION_PATTERNS = re.compile(r"\b(?:dan kemudian|kemudian|selanjutnya|lalu)\b|;|\b(?:serta|dan)\s+(?:pastikan|lakukan|tingkatkan|evaluasi|koordinasikan|percepat|fokuskan)\b", re.IGNORECASE)
-# Common English connective/action terms only. Standard Indonesian BI terms such as
-# forecast, target, risk, performance, and uncertainty are intentionally allowed.
 ENGLISH_MARKERS = re.compile(r"\b(?:the|actual|action|monitor|focus|ensure|increase|decrease|below|above|because|due|shortfall)\b", re.IGNORECASE)
 
 
@@ -56,11 +54,7 @@ def _period_context(row: dict[str, Any]) -> str:
 
 
 def _qualitative_facts(row: dict[str, Any]) -> list[str]:
-    """Build a numeric-free interpretation layer for Hermes.
-
-    Deterministic numeric facts stay in the SQL row and downstream persistence.
-    Hermes receives only qualitative signals derived from already-classified fields.
-    """
+    """Build a numeric-free interpretation layer for Hermes."""
     facts: list[str] = []
     scenario = str(row.get("performance_scenario") or "NO_FORECAST_DATA").upper()
     forecast_scenario = str(row.get("forecast_scenario") or "").upper()
@@ -85,7 +79,7 @@ def _qualitative_facts(row: dict[str, Any]) -> list[str]:
         if matched:
             facts.append(matched)
         elif "UNCERTAIN" in forecast_scenario:
-            facts.append("Forecast memiliki sinyal ketidakpastian yang perlu diperhatikan." )
+            facts.append("Forecast memiliki sinyal ketidakpastian yang perlu diperhatikan.")
         elif "BELOW_TARGET" in forecast_scenario:
             facts.append("Forecast berada di bawah target berdasarkan klasifikasi sistem.")
         elif "ABOVE_TARGET" in forecast_scenario:
@@ -125,13 +119,25 @@ def _qualitative_support(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def build_prompt(row: dict[str, Any], supporting: list[dict[str, Any]] | None = None) -> str:
     level = row["hierarchy_level"]
     identity = "entity_code" if level == "REGION" else "gm_code" if level == "GM" else "insight_level"
+    expected_identity = "CEO" if level == "CEO" else row[identity]
     qualitative_input = {
-        "identity": row.get(identity, "CEO"),
+        "identity": expected_identity,
         "category": row.get("performance_scenario", "NO_FORECAST_DATA"),
         "priority": row.get("priority"),
         "qualitative_facts": _qualitative_facts(row),
     }
     support = _qualitative_support(supporting or [])
+    output_template = {
+        identity: expected_identity,
+        "ai_insight_category": row.get("performance_scenario", "NO_FORECAST_DATA"),
+        "ai_diagnosis": "<DIAGNOSIS>",
+        "triggered_action_plan": "<ONE ACTION>",
+        "priority": row.get("priority"),
+    }
+    identity_instruction = (
+        f'- The ONLY valid value for {identity} is exactly "{expected_identity}". Copy it character-for-character. '
+        f'Do not output "CEO" unless the LEVEL is CEO.'
+    )
     return f"""You are the V2 Sell-In executive BI Insight Agent.
 
 PostgreSQL view dwh_prod.v_ai_forecast_insight_input_v2 is authoritative for deterministic facts.
@@ -155,17 +161,18 @@ HARD RULES:
 - Return ONLY one JSON object, with exactly five fields.
 
 LEVEL: {level}
+EXPECTED IDENTITY: {expected_identity}
 QUALITATIVE INPUT ONLY:
 {json.dumps(qualitative_input, ensure_ascii=False, separators=(",", ":"))}
 
 SUPPORTING CONTEXT (qualitative only; use for CEO/GM attention prioritization):
 {json.dumps(support, ensure_ascii=False, separators=(",", ":"))}
 
-OUTPUT:
-{json.dumps({identity: row.get(identity, "CEO"), "ai_insight_category": row.get("performance_scenario", "NO_FORECAST_DATA"), "ai_diagnosis": "<DIAGNOSIS>", "triggered_action_plan": "<ONE ACTION>", "priority": row.get("priority")}, ensure_ascii=False)}
+OUTPUT CONTRACT:
+{json.dumps(output_template, ensure_ascii=False)}
 
 FIELD RULES:
-- {identity} must exactly equal the supplied identity.
+{identity_instruction}
 - ai_insight_category MUST exactly equal performance_scenario from the supplied qualitative input.
 - Allowed ai_insight_category values: TARGET_ACHIEVED, NEAR_TARGET, AT_RISK, HIGH_RISK, CRITICAL, NO_FORECAST_DATA.
 - priority must exactly equal the supplied priority.
@@ -219,8 +226,6 @@ def _validate_narrative_text(row: dict[str, Any], field: str, value: str) -> Non
     max_sentences = 2 if field == "ai_diagnosis" else 1
     if _sentence_count(value) > max_sentences:
         raise RuntimeError(f"Hermes returned too many sentences in {field}")
-    # Narrative text is intentionally numeric-free. All authoritative numbers
-    # remain in the SQL input/view and downstream persistence/dashboard fields.
     numbers = re.findall(r"(?<![A-Za-z0-9])\d+(?:[.,]\d+)?%?", value)
     if numbers:
         raise RuntimeError(f"Hermes introduced unsupported number in {field}: {numbers[0]}")
@@ -294,7 +299,7 @@ class InsightAgent:
                     break
                 except RuntimeError as exc:
                     last_err = exc
-                    prompt += f"\n\nPREVIOUS ATTEMPT FAILED: {exc}\nFix the invalid field(s) and return the exact same JSON shape with real values. No placeholders. No invented causes, numbers, or multiple actions. Respect sentence limits."
+                    prompt += f"\n\nPREVIOUS ATTEMPT FAILED: {exc}\nFix the invalid field(s). The expected identity is EXACTLY '{row.get('entity_code', 'CEO') if row['hierarchy_level'] != 'CEO' else 'CEO'}'. Return the exact same JSON shape with real values. Do not output CEO for a REGION or GM row. No placeholders, invented causes, numbers, or multiple actions. Respect sentence limits."
                     time.sleep(3)
             if insight is None:
                 raise RuntimeError(f"Row {row.get('entity_code', row.get('gm_code', '?'))} failed after 3 attempts: {last_err}")
