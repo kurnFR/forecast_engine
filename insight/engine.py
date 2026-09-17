@@ -57,6 +57,22 @@ def _period_context(row: dict[str, Any]) -> str:
     return "Gunakan forecast P50/P10/P90 dan achievement forecast persis seperti diberikan."
 
 
+def _focus_context(row: dict[str, Any]) -> str:
+    focus = row.get("focus_required")
+    if focus is True:
+        return (
+            "Focus required = TRUE. Bahasa diagnosis dan aksi boleh menyatakan kebutuhan "
+            "fokus atau intervensi manajemen bila didukung oleh kategori dan fakta yang diberikan."
+        )
+    if focus is False:
+        return (
+            "Focus required = FALSE. Jangan menyebut entitas ini sebagai area prioritas/fokus, "
+            "jangan menyarankan intervensi atau perhatian khusus terhadap entitas ini, dan gunakan "
+            "bahasa pemantauan, pemeliharaan, atau pengawalan eksekusi yang proporsional dengan statusnya."
+        )
+    return "Focus requirement tidak tersedia; jangan mengarang status fokus manajemen."
+
+
 def build_prompt(row: dict[str, Any], supporting: list[dict[str, Any]] | None = None) -> str:
     payload = json.dumps(_jsonable(row), ensure_ascii=False, separators=(",", ":"), default=str)
     support = json.dumps([_jsonable(x) for x in (supporting or [])], ensure_ascii=False, separators=(",", ":"), default=str)
@@ -76,6 +92,7 @@ HARD RULES:
 - Never invent a business/root cause. Model disagreement is a signal only; do not explain why.
 - Never use daily-rate or momentum forecasting logic.
 - {_period_context(row)}
+- {_focus_context(row)}
 - Diagnosis and action MUST be Indonesian and executive-ready.
 - Return ONLY one JSON object, with exactly five fields.
 
@@ -98,6 +115,7 @@ FIELD RULES:
 - ai_diagnosis: max 2 short Indonesian sentences; describe supplied forecast status, gap/risk,
   uncertainty/model-spread signal when material, and management implication. Do not invent causes.
 - triggered_action_plan: exactly one short Indonesian management action supported by the facts.
+- For NEAR_TARGET with focus_required=false, prefer proportional monitoring/maintenance language and avoid wording that implies the entity itself requires special management attention.
 - If target is missing, say target is not established rather than estimating it.
 - If priority is REVIEW because forecast data is unavailable, focus on data/forecast readiness and do not manufacture a business risk.
 - No Markdown, no code fence, no extra fields, no commentary.
