@@ -10,13 +10,14 @@ def base(level="REGION"):
         "periode": "2026-09-01", "hierarchy_level": level,
         "entity_code": "ASWJWA1" if level == "REGION" else "GM-COMJAWA" if level == "GM" else "CEO",
         "entity_name": "ASW JAWA 1" if level == "REGION" else "GM COMMERCIAL JAWA PULAU" if level == "GM" else "CEO",
-        "target_sellin": 24700000000, "mtd_actual": 7481451991,
+        "target_sellin": 24700000000, "mtd_actual": 7481451991, "mtd_achievement_pct": 30.29,
         "forecast_p10": 13528200000, "forecast_p50": 21666500000, "forecast_p90": 25917000000,
         "achievement_pct_forecast": 87.7186, "forecast_gap_to_target": -3033500000,
         "forecast_uncertainty_pct": 54.0, "performance_scenario": "AT_RISK",
         "performance_scenario_name": "At Risk", "forecast_scenario": "P50_BELOW_TARGET_BUT_UNCERTAIN",
         "priority": "MEDIUM", "model_spread": 1962200000, "model_spread_pct_p50": 9.06,
         "forecast_shortfall": 3033500000, "shortfall_contribution_pct": 5.58,
+        "focus_required": True,
         "largest_shortfall_regioncode": None, "largest_shortfall_regionname": None,
         "largest_region_shortfall": None, "largest_region_shortfall_pct": None,
         "largest_shortfall_gm_code": None, "largest_shortfall_gm_name": None,
@@ -47,6 +48,23 @@ def test_prompt_requires_controlled_category():
     prompt = build_prompt(base())
     assert "ai_insight_category MUST exactly equal performance_scenario" in prompt
     assert "TARGET_ACHIEVED, NEAR_TARGET, AT_RISK, HIGH_RISK, CRITICAL, NO_FORECAST_DATA" in prompt
+
+
+def test_prompt_requires_focus_proportional_language():
+    prompt = build_prompt(base())
+    assert "Focus required = TRUE" in prompt
+    assert "focus or intervensi manajemen" in prompt
+
+
+def test_near_target_without_focus_requires_monitoring_language():
+    row = base()
+    row["performance_scenario"] = "NEAR_TARGET"
+    row["focus_required"] = False
+    prompt = build_prompt(row)
+    assert "Focus required = FALSE" in prompt
+    assert "jangan menyebut entitas ini sebagai area prioritas/fokus" in prompt
+    assert "bahasa pemantauan, pemeliharaan, atau pengawalan eksekusi" in prompt
+    assert "For NEAR_TARGET with focus_required=false" in prompt
 
 
 def test_gm_prompt_uses_gm_identity_and_preserves_priority():
