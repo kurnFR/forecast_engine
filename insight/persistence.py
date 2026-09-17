@@ -7,10 +7,27 @@ momentum and daily-rate fields are intentionally not written.
 """
 from __future__ import annotations
 import json
+import math
 from typing import Any
 
 from db import get_engine
 from sqlalchemy import text
+
+
+def _json_safe(value: Any) -> Any:
+    """Convert values that PostgreSQL JSON cannot represent to JSON-safe values."""
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
+
+
+def _json_dumps(value: Any) -> str:
+    """Serialize JSON using standards-compliant values only."""
+    return json.dumps(_json_safe(value), ensure_ascii=False, allow_nan=False, default=str)
 
 
 def persist(results: list[dict[str, Any]]) -> None:
@@ -39,9 +56,9 @@ def persist(results: list[dict[str, Any]]) -> None:
                         (
                             periode, regioncode, regionname,
                             ai_scenario_code, performance_scenario,
+                            projected_month_end_sellin, projected_gap_to_target,
                             projected_achievement_status, priority,
                             target_sellin, total_sellin,
-                            projected_month_end_sellin, projected_gap_to_target,
                             ai_diagnosis, triggered_action_plan,
                             model_name, prompt_version, insight_status, is_active,
                             v2_target_sellin, v2_mtd_actual,
@@ -62,9 +79,9 @@ def persist(results: list[dict[str, Any]]) -> None:
                         (
                             :p, :c, :n,
                             :scenario, :scenario,
+                            :p50, :gap,
                             :scenario, :pri,
                             :target, :actual,
-                            :p50, :gap,
                             :diag, :action,
                             :model, :prompt, 'GENERATED', 1,
                             :target, :actual,
@@ -205,9 +222,9 @@ def persist(results: list[dict[str, Any]]) -> None:
                     """),
                     {
                         "p": period,
-                        "description": json.dumps(insight, ensure_ascii=False),
+                        "description": _json_dumps(insight),
                         "summary": f"{insight['ai_diagnosis']} {insight['triggered_action_plan']}",
-                        "snapshot": json.dumps(row, ensure_ascii=False, default=str),
+                        "snapshot": _json_dumps(row),
                         "model": "hermes-bi-insight",
                         "prompt": "v2-forecast",
                     },
