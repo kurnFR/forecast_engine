@@ -22,14 +22,13 @@ def base(level="REGION"):
         "largest_shortfall_gm_code": None, "largest_shortfall_gm_name": None,
         "largest_gm_shortfall": None, "largest_gm_shortfall_pct": None,
     }
-    if level == "GM": row["gm_code"] = "GM-COMJAWA"
     return row
 
 
 def valid_insight(row, identity=None, priority=None, category=None):
     level = row["hierarchy_level"]
-    key = "entity_code" if level == "REGION" else "gm_code" if level == "GM" else "insight_level"
-    expected = "CEO" if level == "CEO" else row[key]
+    key = "entity_code" if level in {"REGION", "GM"} else "insight_level"
+    expected = "CEO" if level == "CEO" else row["entity_code"]
     return {key: identity if identity is not None else expected,
             "ai_insight_category": category if category is not None else row["performance_scenario"],
             "ai_diagnosis": "Forecast masih di bawah target dan risiko pencapaian perlu diperhatikan.",
@@ -52,9 +51,10 @@ def test_prompt_requires_controlled_category():
 def test_prompt_requires_indonesian_single_action_and_fact_based_narrative():
     prompt = build_prompt(base())
     assert "Diagnosis and action MUST be Indonesian" in prompt
-    assert "Diagnosis must explain the supplied forecast situation" in prompt
+    assert "Diagnosis must connect MTD position, EOM forecast position, risk and management implication" in prompt
     assert "Use at most one management response/action" in prompt
     assert "Narrative fields are QUALITATIVE ONLY" in prompt
+    assert "Do not use causal wording" in prompt
 
 
 def test_prompt_exposes_no_raw_numeric_metric_fields():
@@ -67,20 +67,20 @@ def test_prompt_exposes_no_raw_numeric_metric_fields():
         assert field not in prompt
 
 
-def test_gm_prompt_uses_gm_identity_and_preserves_priority():
+def test_gm_prompt_uses_entity_code_identity_and_preserves_priority():
     prompt = build_prompt(base("GM"))
     assert "LEVEL: GM" in prompt
     assert '"identity":"GM-COMJAWA"' in prompt
     assert '"priority":"MEDIUM"' in prompt
+    assert '"entity_code":"GM-COMJAWA"' in prompt
 
 
-def test_gm_prompt_uses_entity_code_when_gm_code_column_is_absent():
+def test_gm_prompt_uses_entity_code_when_legacy_gm_code_column_is_present():
     row = base("GM")
-    del row["gm_code"]
+    row["gm_code"] = row["entity_code"]
     prompt = build_prompt(row)
-    assert "LEVEL: GM" in prompt
     assert "EXPECTED IDENTITY: GM-COMJAWA" in prompt
-    assert '"identity":"GM-COMJAWA"' in prompt
+    assert '"entity_code":"GM-COMJAWA"' in prompt
 
 
 def test_ceo_prompt_uses_ceo_identity():
@@ -97,16 +97,10 @@ def test_validation_preserves_gm_identity_category_and_priority():
     row = base("GM"); insight = valid_insight(row); assert validate(row, insight) == insight
 
 
-def test_validation_accepts_gm_identity_from_entity_code_when_gm_code_column_is_absent():
+def test_validation_uses_entity_code_for_gm_when_legacy_gm_code_column_is_absent():
     row = base("GM")
-    del row["gm_code"]
-    insight = {
-        "gm_code": "GM-COMJAWA",
-        "ai_insight_category": "AT_RISK",
-        "ai_diagnosis": "Forecast masih di bawah target dan risiko pencapaian perlu diperhatikan.",
-        "triggered_action_plan": "Fokuskan percepatan eksekusi sell-in pada area prioritas.",
-        "priority": "MEDIUM",
-    }
+    insight = valid_insight(row)
+    assert "gm_code" not in insight
     assert validate(row, insight) == insight
 
 
