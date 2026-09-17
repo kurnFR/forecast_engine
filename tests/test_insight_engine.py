@@ -65,6 +65,13 @@ def test_near_target_without_focus_requires_monitoring_language():
     assert "jangan menyebut entitas ini sebagai area prioritas/fokus" in prompt
     assert "bahasa pemantauan, pemeliharaan, atau pengawalan eksekusi" in prompt
     assert "For NEAR_TARGET with focus_required=false" in prompt
+    assert "perkembangan realisasi perlu dipantau secara rutin" in prompt
+
+
+def test_prompt_forbids_unsupported_urgency_wording_and_model_confidence():
+    prompt = build_prompt(base())
+    assert "do not use unsupported wording such as \"mendadak\"" in prompt
+    assert "Do not claim or imply model confidence unless an explicit confidence field is supplied" in prompt
 
 
 def test_gm_prompt_uses_gm_identity_and_preserves_priority():
