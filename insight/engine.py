@@ -23,11 +23,11 @@ ALLOWED_CATEGORIES = {"TARGET_ACHIEVED", "NEAR_TARGET", "AT_RISK", "HIGH_RISK", 
 FOCUS_CATEGORIES = {"AT_RISK", "HIGH_RISK", "CRITICAL"}
 REQUIRED = {
     "REGION": ("entity_code", "ai_insight_category", "ai_diagnosis", "triggered_action_plan", "priority"),
-    "GM": ("gm_code", "ai_insight_category", "ai_diagnosis", "triggered_action_plan", "priority"),
+    "GM": ("entity_code", "ai_insight_category", "ai_diagnosis", "triggered_action_plan", "priority"),
     "CEO": ("insight_level", "ai_insight_category", "ai_diagnosis", "triggered_action_plan", "priority"),
 }
 
-CAUSE_PATTERNS = re.compile(r"\b(?:karena|disebabkan|penyebab(?:nya)?|akibat|dipicu|terkendala|kendala)\b", re.IGNORECASE)
+CAUSE_PATTERNS = re.compile(r"\b(?:karena|disebabkan(?:nya)?|penyebab(?:nya)?|akibat|dipicu|terkendala|kendala)\b", re.IGNORECASE)
 MULTI_ACTION_PATTERNS = re.compile(r"\b(?:dan kemudian|kemudian|selanjutnya|lalu)\b|;|\b(?:serta|dan)\s+(?:pastikan|lakukan|tingkatkan|evaluasi|koordinasikan|percepat|fokuskan)\b", re.IGNORECASE)
 ENGLISH_MARKERS = re.compile(r"\b(?:the|actual|action|monitor|focus|ensure|increase|decrease|below|above|because|due|shortfall)\b", re.IGNORECASE)
 
@@ -149,7 +149,7 @@ def _expected_identity(row: dict[str, Any]) -> str:
 
 def build_prompt(row: dict[str, Any], supporting: list[dict[str, Any]] | None = None) -> str:
     level = row["hierarchy_level"]
-    identity = "entity_code" if level == "REGION" else "gm_code" if level == "GM" else "insight_level"
+    identity = "entity_code" if level in {"REGION", "GM"} else "insight_level"
     expected_identity = _expected_identity(row)
     qualitative_input = {
         "identity": expected_identity,
@@ -187,6 +187,8 @@ HARD RULES:
 - Use at most one management response/action; do not combine multiple actions.
 - Narrative fields are QUALITATIVE ONLY. Never copy, calculate, transform, abbreviate, or mention any numeric value.
 - Do not write number-bearing metrics or model labels such as P50, P10, or P90 in narrative fields.
+- Do not use causal wording such as karena, disebabkan, penyebab, akibat, dipicu, terkendala, or kendala. The supplied facts do not provide causal drivers.
+- If no causal driver is supplied, describe the observable performance and forecast position only.
 - Return ONLY one JSON object, with exactly five fields.
 
 LEVEL: {level}
@@ -327,7 +329,7 @@ class InsightAgent:
                     break
                 except RuntimeError as exc:
                     last_err = exc
-                    prompt += f"\n\nPREVIOUS ATTEMPT FAILED: {exc}\nFix the invalid field(s). The expected identity is EXACTLY '{_expected_identity(row)}'. Return the exact same JSON shape with real values. Do not output CEO for a REGION or GM row. No placeholders, invented causes, numbers, or multiple actions. Respect sentence limits."
+                    prompt += f"\n\nPREVIOUS ATTEMPT FAILED: {exc}\nFix the invalid field(s). The expected identity is EXACTLY '{_expected_identity(row)}'. Return the exact same JSON shape with real values. Do not output CEO for a REGION or GM row. Do not use causal wording or invent business causes. Do not use numbers. Do not use multiple actions. Respect sentence limits."
                     time.sleep(3)
             if insight is None:
                 raise RuntimeError(f"Row {row.get('entity_code', row.get('gm_code', '?'))} failed after 3 attempts: {last_err}")
