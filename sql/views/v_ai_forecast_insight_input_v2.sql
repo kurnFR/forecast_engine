@@ -47,7 +47,12 @@ SELECT
     wc.total_working_days,
     wc.mtd_working_days,
     wc.remaining_working_days,
-    ROUND(r.total_sellin / NULLIF(r.target_sellin, 0) * 100, 2) AS mtd_achievement_pct
+    ROUND(r.total_sellin / NULLIF(r.target_sellin, 0) * 100, 2) AS mtd_achievement_pct,
+    CASE
+        WHEN r.performance_scenario IN ('AT_RISK', 'HIGH_RISK', 'CRITICAL') THEN TRUE
+        WHEN r.performance_scenario IN ('TARGET_ACHIEVED', 'NEAR_TARGET', 'NO_FORECAST_DATA') THEN FALSE
+        ELSE NULL
+    END AS focus_required
 FROM dwh_prod.v_ai_region_monthly_diagnostics_v2 r
 LEFT JOIN working_calendar wc ON wc.periode = r.periode
 
@@ -85,7 +90,12 @@ SELECT
     wc.total_working_days,
     wc.mtd_working_days,
     wc.remaining_working_days,
-    ROUND(g.total_sellin / NULLIF(g.target_sellin, 0) * 100, 2) AS mtd_achievement_pct
+    ROUND(g.total_sellin / NULLIF(g.target_sellin, 0) * 100, 2) AS mtd_achievement_pct,
+    CASE
+        WHEN g.performance_scenario IN ('AT_RISK', 'HIGH_RISK', 'CRITICAL') THEN TRUE
+        WHEN g.performance_scenario IN ('TARGET_ACHIEVED', 'NEAR_TARGET', 'NO_FORECAST_DATA') THEN FALSE
+        ELSE NULL
+    END AS focus_required
 FROM dwh_prod.v_ai_gm_monthly_diagnostics_v2 g
 LEFT JOIN working_calendar wc ON wc.periode = g.periode
 
@@ -123,6 +133,11 @@ SELECT
     wc.total_working_days,
     wc.mtd_working_days,
     wc.remaining_working_days,
-    ROUND(c.total_sellin / NULLIF(c.target_sellin, 0) * 100, 2) AS mtd_achievement_pct
+    ROUND(c.total_sellin / NULLIF(c.target_sellin, 0) * 100, 2) AS mtd_achievement_pct,
+    CASE
+        WHEN c.performance_scenario IN ('AT_RISK', 'HIGH_RISK', 'CRITICAL') THEN TRUE
+        WHEN c.performance_scenario IN ('TARGET_ACHIEVED', 'NEAR_TARGET', 'NO_FORECAST_DATA') THEN FALSE
+        ELSE NULL
+    END AS focus_required
 FROM dwh_prod.v_ai_ceo_monthly_diagnostics_v2 c
 LEFT JOIN working_calendar wc ON wc.periode = c.periode;
