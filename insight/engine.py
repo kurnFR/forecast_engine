@@ -116,10 +116,23 @@ def _qualitative_support(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return result
 
 
+def _expected_identity(row: dict[str, Any]) -> str:
+    """Return the authoritative identity used by the V2 input view.
+
+    REGION and GM rows are keyed by entity_code in the view. GM output uses
+    the gm_code field, but the source row does not necessarily expose a
+    separate gm_code column. CEO is represented by the literal CEO identity.
+    """
+    level = row["hierarchy_level"]
+    if level == "CEO":
+        return "CEO"
+    return str(row.get("entity_code") or row.get("gm_code") or "").strip()
+
+
 def build_prompt(row: dict[str, Any], supporting: list[dict[str, Any]] | None = None) -> str:
     level = row["hierarchy_level"]
     identity = "entity_code" if level == "REGION" else "gm_code" if level == "GM" else "insight_level"
-    expected_identity = "CEO" if level == "CEO" else row[identity]
+    expected_identity = _expected_identity(row)
     qualitative_input = {
         "identity": expected_identity,
         "category": row.get("performance_scenario", "NO_FORECAST_DATA"),
@@ -243,7 +256,7 @@ def validate(row: dict[str, Any], insight: dict[str, Any]) -> dict[str, Any]:
     if missing or extra:
         raise RuntimeError(f"Invalid Hermes shape; missing={missing}, extra={extra}")
     identity = fields[0]
-    expected_identity = row["entity_code"] if level != "CEO" else "CEO"
+    expected_identity = _expected_identity(row)
     if insight[identity] != expected_identity:
         raise RuntimeError(f"Hermes changed {identity}: expected {expected_identity}, got {insight[identity]}")
     category = str(insight["ai_insight_category"]).strip().upper()
@@ -299,7 +312,7 @@ class InsightAgent:
                     break
                 except RuntimeError as exc:
                     last_err = exc
-                    prompt += f"\n\nPREVIOUS ATTEMPT FAILED: {exc}\nFix the invalid field(s). The expected identity is EXACTLY '{row.get('entity_code', 'CEO') if row['hierarchy_level'] != 'CEO' else 'CEO'}'. Return the exact same JSON shape with real values. Do not output CEO for a REGION or GM row. No placeholders, invented causes, numbers, or multiple actions. Respect sentence limits."
+                    prompt += f"\n\nPREVIOUS ATTEMPT FAILED: {exc}\nFix the invalid field(s). The expected identity is EXACTLY '{_expected_identity(row)}'. Return the exact same JSON shape with real values. Do not output CEO for a REGION or GM row. No placeholders, invented causes, numbers, or multiple actions. Respect sentence limits."
                     time.sleep(3)
             if insight is None:
                 raise RuntimeError(f"Row {row.get('entity_code', row.get('gm_code', '?'))} failed after 3 attempts: {last_err}")
