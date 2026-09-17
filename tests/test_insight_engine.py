@@ -18,6 +18,7 @@ def base(level="REGION"):
         "priority": "MEDIUM", "model_spread": 1962200000, "model_spread_pct_p50": 9.06,
         "forecast_shortfall": 3033500000, "shortfall_contribution_pct": 5.58,
         "focus_required": True,
+        "total_working_days": 24, "mtd_working_days": 13, "remaining_working_days": 11,
         "largest_shortfall_regioncode": None, "largest_shortfall_regionname": None,
         "largest_region_shortfall": None, "largest_region_shortfall_pct": None,
         "largest_shortfall_gm_code": None, "largest_shortfall_gm_name": None,
@@ -48,6 +49,15 @@ def test_prompt_requires_controlled_category():
     prompt = build_prompt(base())
     assert "ai_insight_category MUST exactly equal performance_scenario" in prompt
     assert "TARGET_ACHIEVED, NEAR_TARGET, AT_RISK, HIGH_RISK, CRITICAL, NO_FORECAST_DATA" in prompt
+
+
+def test_prompt_requires_numeric_legacy_style_narrative():
+    prompt = build_prompt(base())
+    assert "You MAY reproduce supplied numeric facts in executive Indonesian prose" in prompt
+    assert "Pencapaian saat ini sebesar X% dengan proyeksi akhir bulan di Y% dari target" in prompt
+    assert "Terdapat gap proyeksi sebesar Rp Z" in prompt
+    assert "remaining working days" in prompt
+    assert "include supplied MTD achievement %, EOM forecast achievement %, and forecast gap" in prompt
 
 
 def test_prompt_requires_focus_proportional_language():
