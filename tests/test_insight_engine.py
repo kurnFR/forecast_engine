@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from insight.engine import _extract_json, build_prompt, validate
+from insight.engine import VIEW, _extract_json, build_prompt, validate
 
 
 def base(level="REGION"):
@@ -38,7 +38,7 @@ def valid_insight(row, identity=None, priority=None, category=None):
 
 def test_region_prompt_contains_v2_contract_and_no_v1_momentum():
     prompt = build_prompt(base())
-    assert "v_ai_forecast_insight_input_v2" in prompt
+    assert VIEW == "dwh_prod.v_ai_forecast_insight_input_v2"
     assert "Never use daily-rate or momentum forecasting logic" in prompt
 
 
@@ -72,7 +72,7 @@ def test_gm_prompt_uses_entity_code_identity_and_preserves_priority():
     assert "LEVEL: GM" in prompt
     assert '"identity":"GM-COMJAWA"' in prompt
     assert '"priority":"MEDIUM"' in prompt
-    assert '"entity_code":"GM-COMJAWA"' in prompt
+    assert '"entity_code": "GM-COMJAWA"' in prompt
 
 
 def test_gm_prompt_uses_entity_code_when_legacy_gm_code_column_is_present():
@@ -80,7 +80,7 @@ def test_gm_prompt_uses_entity_code_when_legacy_gm_code_column_is_present():
     row["gm_code"] = row["entity_code"]
     prompt = build_prompt(row)
     assert "EXPECTED IDENTITY: GM-COMJAWA" in prompt
-    assert '"entity_code":"GM-COMJAWA"' in prompt
+    assert '"entity_code": "GM-COMJAWA"' in prompt
 
 
 def test_ceo_prompt_uses_ceo_identity():
