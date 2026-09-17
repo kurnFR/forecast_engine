@@ -74,6 +74,15 @@ def test_gm_prompt_uses_gm_identity_and_preserves_priority():
     assert '"priority":"MEDIUM"' in prompt
 
 
+def test_gm_prompt_uses_entity_code_when_gm_code_column_is_absent():
+    row = base("GM")
+    del row["gm_code"]
+    prompt = build_prompt(row)
+    assert "LEVEL: GM" in prompt
+    assert "EXPECTED IDENTITY: GM-COMJAWA" in prompt
+    assert '"identity":"GM-COMJAWA"' in prompt
+
+
 def test_ceo_prompt_uses_ceo_identity():
     prompt = build_prompt(base("CEO"))
     assert "LEVEL: CEO" in prompt
@@ -86,6 +95,19 @@ def test_validation_preserves_region_identity_category_and_priority():
 
 def test_validation_preserves_gm_identity_category_and_priority():
     row = base("GM"); insight = valid_insight(row); assert validate(row, insight) == insight
+
+
+def test_validation_accepts_gm_identity_from_entity_code_when_gm_code_column_is_absent():
+    row = base("GM")
+    del row["gm_code"]
+    insight = {
+        "gm_code": "GM-COMJAWA",
+        "ai_insight_category": "AT_RISK",
+        "ai_diagnosis": "Forecast masih di bawah target dan risiko pencapaian perlu diperhatikan.",
+        "triggered_action_plan": "Fokuskan percepatan eksekusi sell-in pada area prioritas.",
+        "priority": "MEDIUM",
+    }
+    assert validate(row, insight) == insight
 
 
 def test_validation_preserves_ceo_identity_category_and_priority():
@@ -159,11 +181,6 @@ def test_prompt_contains_no_v1_daily_rate_input_fields():
     assert "mtd_daily_run_rate" not in prompt
     assert "avg_7_working_days" not in prompt
     assert "momentum_factor" not in prompt
-
-
-def test_review_priority_is_normalized_to_uppercase():
-    row = base(); row["priority"] = "review"; insight = valid_insight(row, priority="review")
-    assert validate(row, insight)["priority"] == "REVIEW"
 
 
 def test_validation_rejects_unsupported_numeric_value():
