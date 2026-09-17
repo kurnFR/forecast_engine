@@ -62,13 +62,14 @@ def _focus_context(row: dict[str, Any]) -> str:
     if focus is True:
         return (
             "Focus required = TRUE. Bahasa diagnosis dan aksi boleh menyatakan kebutuhan "
-            "fokus atau intervensi manajemen bila didukung oleh kategori dan fakta yang diberikan."
+            "focus or intervensi manajemen bila didukung oleh kategori dan fakta yang diberikan."
         )
     if focus is False:
         return (
-            "Focus required = FALSE. Jangan menyebut entitas ini sebagai area prioritas/fokus, "
-            "jangan menyarankan intervensi atau perhatian khusus terhadap entitas ini, dan gunakan "
-            "bahasa pemantauan, pemeliharaan, atau pengawalan eksekusi yang proporsional dengan statusnya."
+            "Focus required = FALSE. "
+            "jangan menyebut entitas ini sebagai area prioritas/fokus, jangan menyarankan "
+            "intervensi atau perhatian khusus terhadap entitas ini, dan gunakan bahasa "
+            "pemantauan, pemeliharaan, atau pengawalan eksekusi yang proporsional dengan statusnya."
         )
     return "Focus requirement tidak tersedia; jangan mengarang status fokus manajemen."
 
