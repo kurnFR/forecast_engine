@@ -46,7 +46,8 @@ SELECT
     NULL::numeric AS largest_gm_shortfall_pct,
     wc.total_working_days,
     wc.mtd_working_days,
-    wc.remaining_working_days
+    wc.remaining_working_days,
+    ROUND(r.total_sellin / NULLIF(r.target_sellin, 0) * 100, 2) AS mtd_achievement_pct
 FROM dwh_prod.v_ai_region_monthly_diagnostics_v2 r
 LEFT JOIN working_calendar wc ON wc.periode = r.periode
 
@@ -83,7 +84,8 @@ SELECT
     NULL::numeric AS largest_gm_shortfall_pct,
     wc.total_working_days,
     wc.mtd_working_days,
-    wc.remaining_working_days
+    wc.remaining_working_days,
+    ROUND(g.total_sellin / NULLIF(g.target_sellin, 0) * 100, 2) AS mtd_achievement_pct
 FROM dwh_prod.v_ai_gm_monthly_diagnostics_v2 g
 LEFT JOIN working_calendar wc ON wc.periode = g.periode
 
@@ -120,6 +122,7 @@ SELECT
     c.largest_gm_shortfall_pct_ceo,
     wc.total_working_days,
     wc.mtd_working_days,
-    wc.remaining_working_days
+    wc.remaining_working_days,
+    ROUND(c.total_sellin / NULLIF(c.target_sellin, 0) * 100, 2) AS mtd_achievement_pct
 FROM dwh_prod.v_ai_ceo_monthly_diagnostics_v2 c
 LEFT JOIN working_calendar wc ON wc.periode = c.periode;
