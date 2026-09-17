@@ -1,8 +1,8 @@
 """Hermes V2 insight engine.
 
-The SQL view is the sole source of deterministic facts. Hermes only writes
-narrative fields; validation rejects identity, category, priority, unsupported
-numbers/causes, non-Indonesian output, or multi-action plans.
+The improved forecast is the quantitative input. Legacy business-insight rules
+remain deterministic for MTD achievement, EOM achievement, risk category,
+priority and focus identification. Hermes only writes qualitative narrative.
 """
 from __future__ import annotations
 
@@ -17,9 +17,10 @@ from db import read_sql
 
 VIEW = "dwh_prod.v_ai_forecast_insight_input_v2"
 MODEL_NAME = os.getenv("INSIGHT_MODEL_NAME", "hermes-bi-insight")
-PROMPT_VERSION = "v2-forecast"
+PROMPT_VERSION = "v2-forecast-legacy-insight"
 ALLOWED_PRIORITIES = {"LOW", "MEDIUM", "HIGH", "CRITICAL", "REVIEW"}
 ALLOWED_CATEGORIES = {"TARGET_ACHIEVED", "NEAR_TARGET", "AT_RISK", "HIGH_RISK", "CRITICAL", "NO_FORECAST_DATA"}
+FOCUS_CATEGORIES = {"AT_RISK", "HIGH_RISK", "CRITICAL"}
 REQUIRED = {
     "REGION": ("entity_code", "ai_insight_category", "ai_diagnosis", "triggered_action_plan", "priority"),
     "GM": ("gm_code", "ai_insight_category", "ai_diagnosis", "triggered_action_plan", "priority"),
@@ -29,10 +30,6 @@ REQUIRED = {
 CAUSE_PATTERNS = re.compile(r"\b(?:karena|disebabkan|penyebab(?:nya)?|akibat|dipicu|terkendala|kendala)\b", re.IGNORECASE)
 MULTI_ACTION_PATTERNS = re.compile(r"\b(?:dan kemudian|kemudian|selanjutnya|lalu)\b|;|\b(?:serta|dan)\s+(?:pastikan|lakukan|tingkatkan|evaluasi|koordinasikan|percepat|fokuskan)\b", re.IGNORECASE)
 ENGLISH_MARKERS = re.compile(r"\b(?:the|actual|action|monitor|focus|ensure|increase|decrease|below|above|because|due|shortfall)\b", re.IGNORECASE)
-
-
-def _jsonable(row: dict[str, Any]) -> dict[str, Any]:
-    return {k: (None if v is None else str(v) if hasattr(v, "isoformat") else v) for k, v in row.items()}
 
 
 def load_input(period: str | None = None):
@@ -54,7 +51,7 @@ def _period_context(row: dict[str, Any]) -> str:
 
 
 def _qualitative_facts(row: dict[str, Any]) -> list[str]:
-    """Build a numeric-free interpretation layer for Hermes."""
+    """Build a numeric-free interpretation layer from legacy business rules."""
     facts: list[str] = []
     scenario = str(row.get("performance_scenario") or "NO_FORECAST_DATA").upper()
     forecast_scenario = str(row.get("forecast_scenario") or "").upper()
@@ -74,6 +71,7 @@ def _qualitative_facts(row: dict[str, Any]) -> list[str]:
             "P50_BELOW_TARGET_BUT_UNCERTAIN": "Forecast berada di bawah target dengan ketidakpastian yang material.",
             "HIGH_CONFIDENCE_BELOW_TARGET": "Forecast berada di bawah target dengan keyakinan model yang relatif tinggi.",
             "HIGH_CONFIDENCE_ABOVE_TARGET": "Forecast berada di atas target dengan keyakinan model yang relatif tinggi.",
+            "P50_ABOVE_TARGET_BUT_UNCERTAIN": "Forecast berada di atas target dengan ketidakpastian yang perlu diperhatikan.",
         }
         matched = scenario_map.get(forecast_scenario)
         if matched:
@@ -88,6 +86,18 @@ def _qualitative_facts(row: dict[str, Any]) -> list[str]:
         if row.get("model_spread") not in (None, 0, 0.0):
             facts.append("Terdapat sinyal perbedaan antar-model yang relevan untuk perhatian manajemen.")
 
+        mtd_pct = row.get("mtd_achievement_pct")
+        if mtd_pct is not None and row.get("target_sellin") not in (None, 0):
+            if float(mtd_pct) < 70:
+                facts.append("Pencapaian MTD masih rendah dibandingkan target.")
+            elif float(mtd_pct) < 90:
+                facts.append("Pencapaian MTD belum mendekati target.")
+            else:
+                facts.append("Pencapaian MTD sudah relatif dekat dengan target.")
+
+        if scenario in FOCUS_CATEGORIES:
+            facts.append("Wilayah ini termasuk area yang memerlukan fokus manajemen.")
+
     priority = str(row.get("priority") or "").upper()
     priority_map = {
         "CRITICAL": "Prioritas penanganan bersifat kritis.",
@@ -98,12 +108,10 @@ def _qualitative_facts(row: dict[str, Any]) -> list[str]:
     }
     if priority in priority_map:
         facts.append(priority_map[priority])
-
     return facts
 
 
 def _qualitative_support(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Return supporting context without exposing numeric metric fields to Hermes."""
     result = []
     for row in rows:
         identity = row.get("entity_code") or row.get("gm_code") or row.get("insight_level")
@@ -111,18 +119,28 @@ def _qualitative_support(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "identity": identity,
             "category": row.get("performance_scenario", "NO_FORECAST_DATA"),
             "priority": row.get("priority"),
+            "focus_required": bool(row.get("focus_required", str(row.get("performance_scenario")).upper() in FOCUS_CATEGORIES)),
             "qualitative_facts": _qualitative_facts(row),
         })
     return result
 
 
-def _expected_identity(row: dict[str, Any]) -> str:
-    """Return the authoritative identity used by the V2 input view.
+def _business_facts(row: dict[str, Any]) -> dict[str, Any]:
+    """Return authoritative numeric facts after Hermes has generated narrative."""
+    return {
+        "mtd_achievement_pct": row.get("mtd_achievement_pct"),
+        "eom_forecast_achievement_pct": row.get("achievement_pct_forecast"),
+        "category": row.get("performance_scenario"),
+        "priority": row.get("priority"),
+        "focus_required": bool(row.get("focus_required", str(row.get("performance_scenario")).upper() in FOCUS_CATEGORIES)),
+        "forecast_shortfall": row.get("forecast_shortfall"),
+        "shortfall_contribution_pct": row.get("shortfall_contribution_pct"),
+        "largest_shortfall_regioncode": row.get("largest_shortfall_regioncode"),
+        "largest_shortfall_regionname": row.get("largest_shortfall_regionname"),
+    }
 
-    REGION and GM rows are keyed by entity_code in the view. GM output uses
-    the gm_code field, but the source row does not necessarily expose a
-    separate gm_code column. CEO is represented by the literal CEO identity.
-    """
+
+def _expected_identity(row: dict[str, Any]) -> str:
     level = row["hierarchy_level"]
     if level == "CEO":
         return "CEO"
@@ -151,9 +169,10 @@ def build_prompt(row: dict[str, Any], supporting: list[dict[str, Any]] | None = 
         f'- The ONLY valid value for {identity} is exactly "{expected_identity}". Copy it character-for-character. '
         f'Do not output "CEO" unless the LEVEL is CEO.'
     )
-    return f"""You are the V2 Sell-In executive BI Insight Agent.
+    return f"""You are the executive Sell-In BI Insight Agent.
 
-PostgreSQL view dwh_prod.v_ai_forecast_insight_input_v2 is authoritative for deterministic facts.
+The improved statistical forecast is authoritative for EOM achievement and forecast risk.
+The established business-insight rules remain authoritative for status, priority and focus.
 You are an interpreter, NOT a calculator.
 
 HARD RULES:
@@ -164,13 +183,10 @@ HARD RULES:
 - Never use daily-rate or momentum forecasting logic.
 - {_period_context(row)}
 - Diagnosis and action MUST be Indonesian and executive-ready.
-- Diagnosis must explain the supplied forecast situation, not merely say to monitor it.
+- Diagnosis must connect MTD position, EOM forecast position, risk and management implication when those qualitative facts are supplied.
 - Use at most one management response/action; do not combine multiple actions.
-- Narrative fields are QUALITATIVE ONLY. Never copy, calculate, transform, abbreviate, or mention
-  any numeric value, percentage, amount, ratio, period number, model value, or numeric token.
+- Narrative fields are QUALITATIVE ONLY. Never copy, calculate, transform, abbreviate, or mention any numeric value.
 - Do not write number-bearing metrics or model labels such as P50, P10, or P90 in narrative fields.
-- Use qualitative wording such as "masih di bawah target", "mendekati target",
-  "risiko tinggi", "ketidakpastian material", or "memerlukan perhatian manajemen".
 - Return ONLY one JSON object, with exactly five fields.
 
 LEVEL: {level}
@@ -178,7 +194,7 @@ EXPECTED IDENTITY: {expected_identity}
 QUALITATIVE INPUT ONLY:
 {json.dumps(qualitative_input, ensure_ascii=False, separators=(",", ":"))}
 
-SUPPORTING CONTEXT (qualitative only; use for CEO/GM attention prioritization):
+SUPPORTING CONTEXT (qualitative only; use for GM/CEO focus prioritization):
 {json.dumps(support, ensure_ascii=False, separators=(",", ":"))}
 
 OUTPUT CONTRACT:
@@ -189,11 +205,10 @@ FIELD RULES:
 - ai_insight_category MUST exactly equal performance_scenario from the supplied qualitative input.
 - Allowed ai_insight_category values: TARGET_ACHIEVED, NEAR_TARGET, AT_RISK, HIGH_RISK, CRITICAL, NO_FORECAST_DATA.
 - priority must exactly equal the supplied priority.
-- ai_diagnosis: max 2 short Indonesian sentences; describe forecast status, gap/risk,
-  uncertainty/model-spread signal when material, and management implication using qualitative wording only.
-- triggered_action_plan: exactly ONE short Indonesian management action supported by the qualitative facts.
+- ai_diagnosis: max 2 short Indonesian sentences; explain the business position using the supplied MTD/EOM qualitative facts, risk and uncertainty when material.
+- triggered_action_plan: exactly ONE short Indonesian management action supported by the supplied business facts.
 - Do not state a causal explanation unless the authoritative input explicitly supplies that cause.
-- Do not introduce numeric values in diagnosis or action; authoritative numbers remain in SQL/persistence, not narrative.
+- Do not introduce numeric values in diagnosis or action; authoritative numbers remain structured outside narrative.
 - If target is missing, say target is not established rather than estimating it.
 - If priority is REVIEW because forecast data is unavailable, focus on data/forecast readiness and do not manufacture a business risk.
 - No Markdown, no code fence, no extra fields, no commentary.
@@ -301,7 +316,7 @@ class InsightAgent:
             if row["hierarchy_level"] == "CEO":
                 support = regions + gms
             elif row["hierarchy_level"] == "GM":
-                support = [r for r in regions if r.get("entity_code") == row.get("largest_shortfall_regioncode")]
+                support = [r for r in regions if r.get("focus_required", str(r.get("performance_scenario")).upper() in FOCUS_CATEGORIES)]
             prompt = build_prompt(row, support)
             insight = None
             last_err = None
@@ -316,5 +331,5 @@ class InsightAgent:
                     time.sleep(3)
             if insight is None:
                 raise RuntimeError(f"Row {row.get('entity_code', row.get('gm_code', '?'))} failed after 3 attempts: {last_err}")
-            results.append({"input": row, "insight": insight})
+            results.append({"input": row, "insight": insight, "business_facts": _business_facts(row)})
         return results
