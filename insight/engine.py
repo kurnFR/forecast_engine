@@ -115,7 +115,9 @@ FIELD RULES:
 - ai_diagnosis: max 2 short Indonesian sentences; describe supplied forecast status, gap/risk,
   uncertainty/model-spread signal when material, and management implication. Do not invent causes.
 - triggered_action_plan: exactly one short Indonesian management action supported by the facts.
-- For NEAR_TARGET with focus_required=false, prefer proportional monitoring/maintenance language and avoid wording that implies the entity itself requires special management attention.
+- For NEAR_TARGET with focus_required=false, prefer proportional monitoring/maintenance language and avoid wording that implies the entity itself requires special management attention. Prefer wording such as "perkembangan realisasi perlu dipantau secara rutin" rather than describing the entity as a priority.
+- When describing urgency, use only supportable wording such as "segera" for categories/focus that warrant management attention; do not use unsupported wording such as "mendadak".
+- Do not claim or imply model confidence unless an explicit confidence field is supplied. Describe uncertainty or model disagreement only when those signals are provided.
 - If target is missing, say target is not established rather than estimating it.
 - If priority is REVIEW because forecast data is unavailable, focus on data/forecast readiness and do not manufacture a business risk.
 - No Markdown, no code fence, no extra fields, no commentary.
