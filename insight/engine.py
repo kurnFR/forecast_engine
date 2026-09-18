@@ -106,6 +106,9 @@ NARRATIVE STYLE:
 - Prefer this structure for normal forecasted rows:
   "Pencapaian saat ini sebesar X% dengan proyeksi akhir bulan di Y% dari target. Terdapat gap proyeksi sebesar Rp Z yang [management implication] [with remaining working days when supplied]."
 - The second sentence may mention uncertainty/model spread only when material and supplied, but it must not replace the core MTD + forecast + gap message.
+- For executive monetary formatting, supplied values of Rp1 miliar or more should be expressed as "Rp X,XX miliar" when practical. Do not print full raw integer monetary values with Indonesian thousands separators when an executive miliar representation is possible.
+- State uncertainty/model spread factually only. Do not say uncertainty "memperkuat risiko", "menandakan risiko", or otherwise infer a causal or predictive interpretation unless that exact interpretation is explicitly supplied by the authoritative input.
+- Do not invent operational levers or actions such as coordinating teams, improving the forecast, changing resources, pipeline actions, distribution actions, or target revision unless those facts are explicitly supplied.
 - Keep the narrative factual, concise, and similar in usefulness to the legacy management insight. Avoid generic phrases such as "sinyal risiko yang perlu diawasi" when a concrete gap and working-day fact are available.
 
 LEVEL: {level}
@@ -125,7 +128,7 @@ FIELD RULES:
 - ai_insight_category is a controlled classification, not a replacement for performance_scenario or forecast_scenario.
 - priority must exactly equal the supplied priority. Allowed values are LOW, MEDIUM, HIGH, CRITICAL, or REVIEW.
 - ai_diagnosis: max 2 short Indonesian sentences; include supplied MTD achievement %, EOM forecast achievement %, and forecast gap when available. Include remaining working days when available and relevant. Do not invent causes.
-- Numeric formatting may convert decimal points to Indonesian decimal commas and express supplied monetary values as Rp juta/miliar, but no arithmetic is permitted. For a negative forecast gap, describe the supplied shortfall direction as "di bawah target" and do not print a minus sign before the monetary amount.
+- Numeric formatting may convert decimal points to Indonesian decimal commas and express supplied monetary values as Rp juta/miliar, but no arithmetic is permitted. For a negative forecast gap, describe the supplied shortfall direction as "di bawah target" and do not print a minus sign before the monetary amount. For executive prose, prefer Rp X,XX miliar for supplied values at or above Rp1 miliar instead of raw integer formatting.
 - triggered_action_plan: exactly one short Indonesian management action supported by the facts. Base the action only on supplied forecast gap, working-day, focus/category, priority, and named shortfall-contributor facts. When a forecast gap is supplied, state its supplied monetary amount when practical; do not replace it with a generic phrase such as "menutup gap proyeksi". The action is a management response to the supplied facts, NOT a calculated sales-rate prescription.
 - NEVER use "run rate", "mengejar run rate", "run-rate minimal", or any equivalent daily-rate/momentum prescription. Do not prescribe a calculated daily or period sales threshold. Do not use "realisasi harian" as a calculated forecasting mechanism.
 - Do not use "hari kerja pertama" unless that exact fact is explicitly supplied in the authoritative input. Do not add bracketed labels such as "[risiko tinggi]"; the controlled category already expresses the risk level.
@@ -175,6 +178,10 @@ FORBIDDEN_NARRATIVE_PATTERNS = (
     "hari kerja pertama",
     "prioritas rendah",
     "[risiko tinggi]",
+    "memperkuat risiko",
+    "menandakan risiko",
+    "koordinasikan tim",
+    "memperbaiki proyeksi",
 )
 
 
@@ -190,6 +197,10 @@ def _validate_narrative_text(insight: dict[str, Any]) -> None:
     # monetary amount. This catches raw source-number leakage into executive prose.
     if re.search(r"rp\s*-\s*[0-9]", text):
         raise RuntimeError("Hermes used a negative monetary amount in narrative")
+    # Large raw monetary integers are technically supplied facts but are not
+    # executive-friendly when an Rp miliar representation is available.
+    if re.search(r"rp\s*[0-9]{1,3}(?:\.[0-9]{3}){3,}", text):
+        raise RuntimeError("Hermes used raw large monetary formatting in narrative")
 
 
 def validate(row: dict[str, Any], insight: dict[str, Any]) -> dict[str, Any]:
@@ -215,7 +226,7 @@ def validate(row: dict[str, Any], insight: dict[str, Any]) -> dict[str, Any]:
     if returned_priority != expected_priority:
         raise RuntimeError(f"Hermes changed priority for {expected_identity}")
     if returned_priority not in ALLOWED_PRIORITIES:
-        raise RuntimeError(f"Hermes returned invalid priority: {insight['priority']}")
+        raise RuntimeError(f"Hermes returned invalid priority: {insight["priority"]}")
     insight["priority"] = returned_priority
     _validate_narrative_text(insight)
     placeholders = {"...", "CODE", "DIAGNOSIS", "ACTION", "PLACEHOLDER", "N/A", "UNKNOWN", "TBD"}
@@ -261,3 +272,4 @@ class InsightAgent:
                 raise RuntimeError(f"Row {row.get('entity_code', row.get('gm_code', '?'))} failed after 3 attempts: {last_err}")
             results.append({"input": row, "insight": insight})
         return results
+    
