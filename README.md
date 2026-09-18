@@ -656,3 +656,196 @@ Beyond the fixes above, in rough order of leverage:
    from historical point-forecast residuals — especially valuable for
    regions near the 24-month eligibility threshold, where the residual
    history used for calibration is itself thin.
+
+## Code review notes, round 4 (Claude, 2026-09-12)
+
+Reviewed at commit `97510c4`, focused specifically on `insight/engine.py` —
+the Hermes rule engine that turns the V2 diagnostics facts into
+`ai_diagnosis`/`triggered_action_plan` narratives. Nothing in the codebase
+was changed as part of this review; only this section was added. This round
+cross-checked the engine's own rules against a real sample of 8 generated
+rows, which turned up a genuine rule violation in production output, plus a
+precisely identified root cause for the number-formatting inconsistency
+visible in that sample.
+
+### 🔴 A "LARANGAN" (forbidden) rule is already being violated in real output, with zero code-level enforcement
+
+The prompt in `build_prompt()` explicitly forbids certain words in
+`triggered_action_plan`:
+
+```
+LARANGAN: "memastikan", "menjamin", kata pasti/garansi
+```
+
+The first row of the sample output you shared reads:
+
+> *"Lakukan pemantauan rutin realisasi untuk **memastikan** penutupan gap
+> proyeksi Rp 1,93 miliar menuju target."*
+
+That's a direct violation of the engine's own rule, already persisted to
+the database. The reason it got through: `validate()` in `insight/engine.py`
+only checks **shape** (identity, `ai_insight_category`, `priority`,
+placeholder detection) — it never inspects the actual text of `ai_diagnosis`
+or `triggered_action_plan` against any of the prompt's own style/lexical
+rules (the `LARANGAN` list, the "no root-cause invention" rule, the
+"segera hanya bila didukung" rule). Every one of those constraints is
+currently **prompt-only** — it depends entirely on Hermes following
+instructions correctly every single call, with no programmatic backstop.
+Given a real, observed violation already exists in production data, this
+isn't a theoretical risk.
+
+**Suggested fix**: add a lexical lint pass to `validate()`, in the same
+place identity/category/priority are already enforced — regex-check
+`ai_diagnosis` and `triggered_action_plan` against the forbidden-word list,
+and raise `RuntimeError` (which already triggers the existing 3-attempt
+retry-with-feedback loop in `InsightAgent.generate()`) on a hit, exactly
+the way an invalid category or a placeholder value does today. This turns
+the style rules from "please" into "enforced," using infrastructure that
+already exists in the file.
+
+### 🔴 No check that a narrated number actually matches the source-of-truth value
+
+Hard constraint #2 in the prompt says *"Arithmetic FORBIDDEN: never
+recalculate, change, or invent any number."* Nothing in `validate()` checks
+this. If Hermes writes "Rp 4,1 miliar" in a diagnosis, there is currently no
+code anywhere that confirms that figure corresponds to that row's actual
+`forecast_gap_to_target`. For a BI system whose entire value proposition is
+"numbers you can trust," a silently-wrong number in the narrative is a more
+dangerous failure mode than an obviously-fake placeholder (which *is*
+caught).
+
+**Suggested fix**: extract the numeric tokens near "Rp" and "%" in the
+generated text (a modest regex is enough — Indonesian-formatted numbers
+follow a small set of patterns) and confirm each one is within a small
+tolerance of one of the row's own supplied numeric fields
+(`forecast_gap_to_target`, `achievement_pct_forecast`,
+`forecast_uncertainty_pct`, `mtd_achievement_pct`, shortfall contributor
+values, etc.). Reject and retry on a mismatch, same pattern as above.
+
+### 🟡 Root cause of the inconsistent decimal precision visible in your sample
+
+Your sample alternates between `49,64%` / `92,18%` (2 decimals) and
+`24,1%` / `56,0%` (1 decimal), and between `Rp 4,1 miliar` (converted,
+1 decimal) and `Rp 32.189.392.984` / `Rp14.053.966.965` (raw digit-grouped,
+no conversion, no space after "Rp" in one case). Traced this to two
+concrete, fixable causes rather than "the LLM being inconsistent":
+
+1. **The source numbers themselves have inconsistent precision.**
+   `forecast/predict.py:167` computes
+   `achievement_pct_forecast = forecast_p50 / target_sellin * 100` with
+   **no rounding at all**, stored as `numeric(9,4)` — so it can carry up to
+   4 decimal places of noise (e.g. `92.178943`). Meanwhile, in the same
+   payload, `v_ai_forecast_insight_input_v2.sql:50` computes
+   `mtd_achievement_pct` with an explicit `ROUND(..., 2)`. Two percentage
+   fields in the exact same JSON object handed to Hermes carry different,
+   inconsistent precision by construction — the model is just reflecting
+   what it was given.
+2. **Unit conversion ("Rp X miliar") is "allowed," not required, and every
+   row is a fully independent subprocess call.** The prompt says *"Numeric
+   formatting allowed: ... Rp juta/miliar"* — permissive language, not a
+   mandate — and `run_hermes()` invokes a fresh subprocess per row with no
+   shared context between calls. There's no mechanism that could make two
+   separate Hermes invocations agree on a formatting convention even if
+   each one is internally consistent; row 8's `Rp 32.189.392.984` and row
+   1's `Rp 1,93 miliar` are two independently "valid" choices under the
+   current instructions.
+
+**Suggested fix for both, and the most robust option available**: stop
+asking Hermes to format numbers at all. Pre-compute the final display
+strings in Python (`format_pct(value, decimals=1)`,
+`format_rupiah_miliar(value)`) before building the payload, and instruct
+Hermes to copy those pre-formatted strings verbatim into the narrative
+rather than doing the Rp/percent conversion itself. This removes an entire
+class of inconsistency at the source instead of trying to constrain it
+through prompt wording.
+
+### 🟡 "Material" is never defined numerically
+
+Rule: *"Second sentence: uncertainty/model spread ONLY when material AND
+supplied."* "Material" has no numeric threshold anywhere in the engine.
+In the sample, a region at 52,6% uncertainty gets a plain statement of the
+number, while a region at 49,23% gets the added judgment word "tinggi"
+("high") — two similar-magnitude values, described with different levels of
+editorializing, from two independent calls with no way to stay consistent
+with each other. Suggested fix: define explicit thresholds in the prompt or
+in Python before the call (e.g. "mention only if `forecast_uncertainty_pct`
+> 25; describe as *tinggi* only if > 40"), so this becomes a deterministic
+rule rather than model taste applied independently 8+ times per batch.
+
+### 🟡 One failing row currently blocks the entire batch
+
+`InsightAgent.generate()` raises `RuntimeError` and aborts if a single row
+fails validation after 3 attempts — and `insight/batch.py::run()` calls
+`persist(results)` only after `generate()` returns successfully. So one
+stubborn region (e.g. one that keeps tripping a validation rule) currently
+blocks Region + GM + CEO insight persistence for the **entire period**, not
+just that one row. Worth considering a per-row commit (persist each row as
+it validates, collect failures into a short report at the end) so a single
+flaky row degrades gracefully instead of taking down the whole month's
+insight refresh.
+
+### 🟡 Test suite is currently red, and there's repo clutter from getting there
+
+```
+8 failed, 39 passed in 6.20s
+```
+
+All 8 failures are in `tests/test_insight_engine.py`, and all are the same
+root cause: the recent commit `97510c4` ("refactor: clean up AI insight
+prompt rules in build_prompt()") reworded/translated several rule strings
+in the prompt (e.g. the category rule is now *"ai_insight_category MUST
+equal performance_scenario (exact value, case-sensitive)"*), but the tests
+still assert on the old literal wording (*"ai_insight_category MUST exactly
+equal performance_scenario"*, *"do not manufacture a business risk"* for
+what's now an Indonesian sentence). Nothing about the actual rule logic
+regressed — this is purely tests asserting on prose that moved. Also
+sitting in `tests/` right now: `test_insight_engine.py.fix`,
+`test_insight_engine.py.fix2`, `test_insight_engine.py.tmp`,
+`test_insight_engine_fix.py`, `test_insight_engine_fix2.py` — five leftover
+files from what looks like iterative in-place patching that didn't get
+consolidated back into `test_insight_engine.py` or deleted. Recommend:
+update the 8 assertions to match current prompt wording (or better, assert
+on stable *keys*/rule identifiers rather than exact prose, so the next
+wording tweak doesn't break tests again), and delete the four throwaway
+files.
+
+### 🟢 What's genuinely good about this engine
+
+- The protected-field design — identity, category, and priority are
+  supplied by SQL and *validated* to be echoed back exactly, with a
+  3-attempt retry-with-feedback loop when Hermes drifts — is the right
+  shape for keeping an LLM's structured fields trustworthy. It's the same
+  pattern the numeric/lexical checks above are recommending extending to
+  the narrative *text*, not a new idea.
+- `focus_required` explicitly telling the model to use "pemantauan
+  proporsional" (proportional monitoring) language for a `NEAR_TARGET`
+  region with no focus flag, instead of alarmist language by default, shows
+  real attention to how this reads to a business audience rather than just
+  "get the numbers right."
+- Giving GM/CEO rows "supporting context" (their worst-shortfall region)
+  and instructing the model to name it explicitly is visibly working in
+  your sample — rows 7 and 8 correctly name "ASW PULAU 1" and "ASW Sumatera
+  1" rather than staying generic. That's a real, useful executive-insight
+  feature, not just decoration.
+- One thing worth remembering while reading GM/CEO narratives this engine
+  produces: the `achievement_pct_forecast` and uncertainty figures it's
+  narrating at GM/CEO level inherit the naive-quantile-summation issue
+  flagged in round 3 (`SUM(forecast_p10)`/`SUM(forecast_p90)` across
+  regions). Fixing that upstream will directly improve what this engine is
+  able to say truthfully at the executive level — the two findings are
+  connected, not independent.
+
+### Suggested order of fixes
+
+1. Add the lexical lint (`LARANGAN` words) and numeric-fidelity checks to
+   `validate()` — cheapest, highest-leverage fix given a rule violation is
+   already in production data.
+2. Pre-format Rp/percentage strings in Python and have Hermes copy them
+   verbatim — removes the precision/unit-conversion inconsistency at the
+   root instead of constraining it through prompt wording.
+3. Fix the 8 stale test assertions and delete the leftover `.fix`/`.tmp`
+   test files so CI is green and `tests/` reflects one canonical suite.
+4. Define numeric materiality thresholds for the "mention uncertainty only
+   if material" rule.
+5. Consider per-row persistence so one flaky row doesn't block a full
+   period's Region/GM/CEO insight refresh.
