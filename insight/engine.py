@@ -125,8 +125,9 @@ FIELD RULES:
 - ai_insight_category is a controlled classification, not a replacement for performance_scenario or forecast_scenario.
 - priority must exactly equal the supplied priority. Allowed values are LOW, MEDIUM, HIGH, CRITICAL, or REVIEW.
 - ai_diagnosis: max 2 short Indonesian sentences; include supplied MTD achievement %, EOM forecast achievement %, and forecast gap when available. Include remaining working days when available and relevant. Do not invent causes.
-- Numeric formatting may convert decimal points to Indonesian decimal commas and express supplied monetary values as Rp juta/miliar, but no arithmetic is permitted.
-- triggered_action_plan: exactly one short Indonesian management action supported by the facts.
+- Numeric formatting may convert decimal points to Indonesian decimal commas and express supplied monetary values as Rp juta/miliar, but no arithmetic is permitted. For a negative forecast gap, describe the supplied shortfall direction as "di bawah target" and do not print a minus sign before the monetary amount.
+- triggered_action_plan: exactly one short Indonesian management action supported by the facts. Base the action only on supplied forecast gap, working-day, focus/category, priority, and named shortfall-contributor facts. Do not invent operational causes or levers such as pipeline, distribution, resource allocation, or target revision unless those facts are explicitly supplied.
+- For GM and CEO rows, when a named largest shortfall contributor is supplied, the diagnosis or action should identify that contributor explicitly; do not use only generic wording such as "wilayah kontributor shortfall terbesar".
 - For NEAR_TARGET with focus_required=false, prefer proportional monitoring/maintenance language and avoid wording that implies the entity itself requires special management attention. Prefer wording such as "perkembangan realisasi perlu dipantau secara rutin" rather than describing the entity as a priority.
 - When describing urgency, use only supportable wording such as "segera" for categories/focus that warrant management attention; do not use unsupported wording such as "mendadak".
 - Do not claim or imply model confidence unless an explicit confidence field is supplied. Describe uncertainty or model disagreement only when those signals are provided.
