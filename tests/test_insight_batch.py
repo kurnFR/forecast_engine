@@ -18,7 +18,7 @@ def test_generate_continues_after_row_failure(monkeypatch):
     monkeypatch.setattr(engine.time, "sleep", lambda _: None)
 
     def fake_run_hermes(prompt):
-        if '"entity_code":"BAD"' in prompt:
+        if 'LEVEL: REGION\nAUTHORITATIVE INPUT:\n{"hierarchy_level":"REGION","entity_code":"BAD"}' in prompt:
             raise RuntimeError("forced row failure")
         return {"ok": True}
 
