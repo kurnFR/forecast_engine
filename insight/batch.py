@@ -13,8 +13,17 @@ def run(period: str | None = None) -> list[dict]:
     agent = InsightAgent(period)
     # Generate is ordered REGION, GM, CEO by the input view; CEO receives the
     # full lower-level context while deterministic values remain unchanged.
-    results = agent.generate()
-    persist(results)
+    results = agent.generate(continue_on_error=True)
+    if results:
+        persist(results)
+    if agent.failures:
+        failed = ", ".join(
+            f"{x['input'].get('hierarchy_level')}:{x['input'].get('entity_code', x['input'].get('gm_code', 'CEO'))}"
+            for x in agent.failures
+        )
+        raise RuntimeError(
+            f"V2 insight batch completed with {len(agent.failures)} failed row(s): {failed}"
+        )
     return results
 
 
