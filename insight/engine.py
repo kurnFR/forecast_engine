@@ -246,8 +246,9 @@ class InsightAgent:
         if levels != {"REGION", "GM", "CEO"}:
             raise RuntimeError(f"Expected REGION/GM/CEO hierarchy, got {levels}")
 
-    def generate(self) -> list[dict[str, Any]]:
+    def generate(self, continue_on_error: bool = False) -> list[dict[str, Any]]:
         results = []
+        self.failures: list[dict[str, Any]] = []
         regions = [r for r in self.rows if r["hierarchy_level"] == "REGION"]
         gms = [r for r in self.rows if r["hierarchy_level"] == "GM"]
         for row in self.rows:
@@ -269,7 +270,17 @@ class InsightAgent:
                     prompt += f"\n\nPREVIOUS ATTEMPT FAILED: {exc}\nFix the invalid field(s) and return the exact same JSON shape with real values. No placeholders."
                     time.sleep(3)
             if insight is None:
-                raise RuntimeError(f"Row {row.get('entity_code', row.get('gm_code', '?'))} failed after 3 attempts: {last_err}")
+                failure = {"input": row, "error": str(last_err)}
+                self.failures.append(failure)
+                if not continue_on_error:
+                    raise RuntimeError(f"Row {row.get('entity_code', row.get('gm_code', '?'))} failed after 3 attempts: {last_err}")
+                logger.error(
+                    "V2 insight row failed; continuing batch: %s %s: %s",
+                    row.get("hierarchy_level"),
+                    row.get("entity_code", row.get("gm_code", "CEO")),
+                    last_err,
+                )
+                continue
             results.append({"input": row, "insight": insight})
         return results
     
