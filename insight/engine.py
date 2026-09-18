@@ -167,6 +167,31 @@ def run_hermes(prompt: str, attempts: int = 2) -> dict[str, Any]:
     raise RuntimeError(f"Hermes failed after {attempts} attempts: {last}")
 
 
+FORBIDDEN_NARRATIVE_PATTERNS = (
+    "run rate",
+    "run-rate",
+    "mengejar run rate",
+    "realisasi harian",
+    "hari kerja pertama",
+    "prioritas rendah",
+    "[risiko tinggi]",
+)
+
+
+def _validate_narrative_text(insight: dict[str, Any]) -> None:
+    text = " ".join(
+        str(insight.get(field, ""))
+        for field in ("ai_diagnosis", "triggered_action_plan")
+    ).lower()
+    for phrase in FORBIDDEN_NARRATIVE_PATTERNS:
+        if phrase in text:
+            raise RuntimeError(f"Hermes used forbidden narrative phrase: {phrase}")
+    # Negative forecast gaps must be expressed as a shortfall, not as a negative
+    # monetary amount. This catches raw source-number leakage into executive prose.
+    if re.search(r"rp\\s*-\\s*[0-9]", text):
+        raise RuntimeError("Hermes used a negative monetary amount in narrative")
+
+
 def validate(row: dict[str, Any], insight: dict[str, Any]) -> dict[str, Any]:
     level = row["hierarchy_level"]
     fields = REQUIRED[level]
@@ -192,6 +217,7 @@ def validate(row: dict[str, Any], insight: dict[str, Any]) -> dict[str, Any]:
     if returned_priority not in ALLOWED_PRIORITIES:
         raise RuntimeError(f"Hermes returned invalid priority: {insight['priority']}")
     insight["priority"] = returned_priority
+    _validate_narrative_text(insight)
     placeholders = {"...", "CODE", "DIAGNOSIS", "ACTION", "PLACEHOLDER", "N/A", "UNKNOWN", "TBD"}
     for field in fields:
         value = str(insight.get(field, "")).strip()
