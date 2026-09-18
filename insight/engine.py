@@ -8,6 +8,7 @@ Hermes subprocess/retry/JSON pattern without its V1 forecasting inputs.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import subprocess
@@ -15,6 +16,8 @@ import time
 from typing import Any
 
 from db import read_sql
+
+logger = logging.getLogger(__name__)
 
 VIEW = "dwh_prod.v_ai_forecast_insight_input_v2"
 MODEL_NAME = os.getenv("INSIGHT_MODEL_NAME", "hermes-bi-insight")
@@ -193,12 +196,8 @@ def _validate_narrative_text(insight: dict[str, Any]) -> None:
     for phrase in FORBIDDEN_NARRATIVE_PATTERNS:
         if phrase in text:
             raise RuntimeError(f"Hermes used forbidden narrative phrase: {phrase}")
-    # Negative forecast gaps must be expressed as a shortfall, not as a negative
-    # monetary amount. This catches raw source-number leakage into executive prose.
     if re.search(r"rp\s*-\s*[0-9]", text):
         raise RuntimeError("Hermes used a negative monetary amount in narrative")
-    # Large raw monetary integers are technically supplied facts but are not
-    # executive-friendly when an Rp miliar representation is available.
     if re.search(r"rp\s*[0-9]{1,3}(?:\.[0-9]{3}){3,}", text):
         raise RuntimeError("Hermes used raw large monetary formatting in narrative")
 
@@ -226,7 +225,7 @@ def validate(row: dict[str, Any], insight: dict[str, Any]) -> dict[str, Any]:
     if returned_priority != expected_priority:
         raise RuntimeError(f"Hermes changed priority for {expected_identity}")
     if returned_priority not in ALLOWED_PRIORITIES:
-        raise RuntimeError(f"Hermes returned invalid priority: {insight["priority"]}")
+        raise RuntimeError(f"Hermes returned invalid priority: {insight['priority']}")
     insight["priority"] = returned_priority
     _validate_narrative_text(insight)
     placeholders = {"...", "CODE", "DIAGNOSIS", "ACTION", "PLACEHOLDER", "N/A", "UNKNOWN", "TBD"}
@@ -283,4 +282,3 @@ class InsightAgent:
                 continue
             results.append({"input": row, "insight": insight})
         return results
-    
