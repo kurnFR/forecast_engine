@@ -102,14 +102,14 @@ def persist(results: list[dict[str, Any]]) -> None:
                         v2_model_spread, v2_model_spread_pct_p50, v2_forecast_shortfall,
                         v2_shortfall_contribution_pct, v2_largest_shortfall_regioncode,
                         v2_largest_shortfall_regionname, v2_largest_region_shortfall,
-                        v2_largest_region_shortfall_pct, v2_focus_required
+                        v2_largest_region_shortfall_pct, v2_focus_required, v2_ai_insight_category
                     )
                     VALUES
                     (
                         :p, :c, :category, :diag, :action, :pri, :model, :prompt, 'GENERATED', 1,
                         :target, :actual, :mtdach, :p10, :p50, :p90, :ach, :gap, :unc,
                         :scenario, :fs, :spread, :spreadpct, :shortfall, :contrib,
-                        :lr, :lrn, :ls, :lsp, :focus
+                        :lr, :lrn, :ls, :lsp, :focus, :category
                     )
                 """), {
                     "p": period, "c": row["entity_code"], "category": insight["ai_insight_category"],
