@@ -53,7 +53,7 @@ WITH active_hierarchy AS (
             THEN (r.forecast_p90 - r.forecast_p10) / (2.0 * 1.2815515655446)
             ELSE NULL
         END AS regional_sigma
-    FROM dwh_prod.v_ai_region_monthly_diagnostics_v2 r
+    FROM dwh_prod.v_ai_region_monthly_insight_v2 r
     JOIN active_hierarchy h
       ON r.regioncode = h.regioncode
 ), aggregated AS (
