@@ -53,7 +53,7 @@ SELECT
         WHEN r.performance_scenario IN ('TARGET_ACHIEVED', 'NEAR_TARGET', 'NO_FORECAST_DATA') THEN FALSE
         ELSE NULL
     END AS focus_required
-FROM dwh_prod.v_ai_region_monthly_diagnostics_v2 r
+FROM dwh_prod.v_ai_region_monthly_insight_v2 r
 LEFT JOIN working_calendar wc ON wc.periode = r.periode
 
 UNION ALL
