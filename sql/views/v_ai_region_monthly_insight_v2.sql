@@ -1,12 +1,7 @@
--- V2 region monthly insight
--- Forecast source: dwh_prod.forecast_sellin_eom
--- Target source: dwh_prod.mv_ai_region_monthly (already embedded in forecast output)
--- This replaces the old daily-rate/momentum forecast interpretation with
--- the statistical P50 forecast and its P10/P90 uncertainty bounds.
---
--- Data-quality rule: only exactly one active hierarchy row may map a region.
--- Ambiguous active mappings are deliberately excluded instead of being
--- allowed to fan out forecast rows.
+-- V2 canonical region monthly AI facts
+-- Persisted forecast snapshot boundary: dwh_prod.forecast_sellin_eom.
+-- This view is the single regional fact layer for Region, GM and CEO.
+-- No forecasting logic is introduced here.
 
 CREATE OR REPLACE VIEW dwh_prod.v_ai_region_monthly_insight_v2 AS
 WITH active_hierarchy AS (
@@ -24,9 +19,9 @@ WITH active_hierarchy AS (
         h.regionname,
         f.target_sellin,
         f.mtd_value AS total_sellin,
+        f.total_working_days,
         f.elapsed_working_days AS mtd_working_days,
         f.remaining_working_days,
-        f.total_working_days,
         f.forecast_baseline,
         f.forecast_ets,
         f.forecast_sarima,
@@ -44,7 +39,20 @@ WITH active_hierarchy AS (
         ROUND(
             f.mtd_value / NULLIF(f.target_sellin, 0) * 100,
             2
-        ) AS current_achievement_pct
+        ) AS current_achievement_pct,
+        GREATEST(f.target_sellin - f.forecast_p50, 0) AS forecast_shortfall,
+        GREATEST(f.forecast_p50 - f.target_sellin, 0) AS forecast_surplus,
+        GREATEST(
+            f.forecast_baseline,
+            f.forecast_ets,
+            f.forecast_sarima,
+            f.forecast_xgboost
+        ) - LEAST(
+            f.forecast_baseline,
+            f.forecast_ets,
+            f.forecast_sarima,
+            f.forecast_xgboost
+        ) AS model_spread
     FROM dwh_prod.forecast_sellin_eom f
     LEFT JOIN active_hierarchy h
         ON f.regioncode = h.regioncode
@@ -60,8 +68,10 @@ WITH active_hierarchy AS (
             ELSE 'CRITICAL'
         END AS performance_scenario,
         CASE
-            WHEN b.forecast_p10 IS NULL OR b.forecast_p50 IS NULL OR b.forecast_p90 IS NULL
-                OR b.target_sellin IS NULL THEN 'NO_FORECAST_DATA'
+            WHEN b.forecast_p10 IS NULL
+              OR b.forecast_p50 IS NULL
+              OR b.forecast_p90 IS NULL
+              OR b.target_sellin IS NULL THEN 'NO_FORECAST_DATA'
             WHEN b.forecast_p10 >= b.target_sellin
                 THEN 'HIGH_CONFIDENCE_ABOVE_TARGET'
             WHEN b.forecast_p90 < b.target_sellin
@@ -71,6 +81,12 @@ WITH active_hierarchy AS (
             ELSE 'P50_BELOW_TARGET_BUT_UNCERTAIN'
         END AS forecast_scenario
     FROM base b
+), totals AS (
+    SELECT
+        periode,
+        SUM(forecast_shortfall) AS total_forecast_shortfall
+    FROM classified
+    GROUP BY periode
 )
 SELECT
     c.periode,
@@ -107,7 +123,17 @@ SELECT
         WHEN c.achievement_pct_forecast < 50 THEN 'CRITICAL'
         WHEN c.achievement_pct_forecast < 70 THEN 'HIGH'
         WHEN c.achievement_pct_forecast < 90 THEN 'MEDIUM'
-        WHEN c.achievement_pct_forecast < 100 THEN 'LOW'
         ELSE 'LOW'
-    END AS priority
-FROM classified c;
+    END AS priority,
+    ROUND(c.model_spread, 0) AS model_spread,
+    ROUND(c.model_spread / NULLIF(c.forecast_p50, 0) * 100, 2)
+        AS model_spread_pct_p50,
+    ROUND(c.forecast_shortfall, 0) AS forecast_shortfall,
+    ROUND(
+        c.forecast_shortfall
+        / NULLIF(t.total_forecast_shortfall, 0) * 100,
+        2
+    ) AS shortfall_contribution_pct
+FROM classified c
+JOIN totals t
+  ON t.periode = c.periode;
