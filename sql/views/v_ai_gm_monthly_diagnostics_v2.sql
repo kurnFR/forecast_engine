@@ -15,8 +15,8 @@ CREATE OR REPLACE VIEW dwh_prod.v_ai_gm_monthly_diagnostics_v2 AS
 WITH active_hierarchy AS (
     SELECT
         regioncode,
-        MAX(gm_code) AS gm_code,
-        MAX(gm_name) AS gm_name
+        MAX(gm_code)::varchar(50) AS gm_code,
+        MAX(gm_name)::varchar(150) AS gm_name
     FROM dwh_prod.m_sales_org_hierarchy
     WHERE is_active = TRUE
     GROUP BY regioncode
