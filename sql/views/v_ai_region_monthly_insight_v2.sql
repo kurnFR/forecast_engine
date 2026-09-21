@@ -16,7 +16,7 @@ WITH active_hierarchy AS (
     SELECT
         f.periode,
         f.regioncode,
-        h.regionname,
+        h.regionname::varchar(150) AS regionname,
         f.target_sellin,
         f.mtd_value AS total_sellin,
         f.total_working_days,
