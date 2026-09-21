@@ -132,7 +132,7 @@ FIELD RULES:
 - priority must exactly equal the supplied priority. Allowed values are LOW, MEDIUM, HIGH, CRITICAL, or REVIEW.
 - ai_diagnosis: max 2 short Indonesian sentences; include supplied MTD achievement %, EOM forecast achievement %, and forecast gap when available. Include remaining working days when available and relevant. Do not invent causes.
 - Numeric formatting may convert decimal points to Indonesian decimal commas and express supplied monetary values as Rp juta/miliar, but no arithmetic is permitted. For a negative forecast gap, describe the supplied shortfall direction as "di bawah target" and do not print a minus sign before the monetary amount. For executive prose, prefer Rp X,XX miliar for supplied values at or above Rp1 miliar instead of raw integer formatting.
-- triggered_action_plan: exactly one short Indonesian management action supported by the facts. Base the action only on supplied forecast gap, working-day, focus/category, priority, and named shortfall-contributor facts. When a forecast gap is supplied, state its supplied monetary amount when practical; do not replace it with a generic phrase such as "menutup gap proyeksi". The action is a management response to the supplied facts, NOT a calculated sales-rate prescription.
+- triggered_action_plan: exactly ONE short Indonesian management action, expressed as ONE sentence, supported by the facts. Base the action only on supplied forecast gap, working-day, focus/category, priority, and named shortfall-contributor facts. When a forecast gap is supplied, state its supplied monetary amount when practical; do not replace it with a generic phrase such as "menutup gap proyeksi". The action is a management response to the supplied facts, NOT a calculated sales-rate prescription.
 - NEVER use "run rate", "mengejar run rate", "run-rate minimal", or any equivalent daily-rate/momentum prescription. Do not prescribe a calculated daily or period sales threshold. Do not use "realisasi harian" as a calculated forecasting mechanism.
 - Do not use "hari kerja pertama" unless that exact fact is explicitly supplied in the authoritative input. Do not add bracketed labels such as "[risiko tinggi]"; the controlled category already expresses the risk level.
 - Do not invent operational causes or levers such as pipeline, distribution, resource allocation, or target revision unless those facts are explicitly supplied.
@@ -200,6 +200,10 @@ def _validate_narrative_text(insight: dict[str, Any]) -> None:
         raise RuntimeError("Hermes used a negative monetary amount in narrative")
     if re.search(r"rp\s*[0-9]{1,3}(?:\.[0-9]{3}){3,}", text):
         raise RuntimeError("Hermes used raw large monetary formatting in narrative")
+    actions = re.split(r"(?<=[.!?])\s+", str(insight.get("triggered_action_plan", "")).strip())
+    actions = [x for x in actions if x]
+    if len(actions) != 1:
+        raise RuntimeError("Hermes triggered_action_plan must contain exactly one action sentence")
 
 
 def validate(row: dict[str, Any], insight: dict[str, Any]) -> dict[str, Any]:
@@ -228,6 +232,9 @@ def validate(row: dict[str, Any], insight: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError(f"Hermes returned invalid priority: {insight['priority']}")
     insight["priority"] = returned_priority
     _validate_narrative_text(insight)
+    diagnosis = str(insight.get("ai_diagnosis", "")).strip()
+    if len([x for x in re.split(r"(?<=[.!?])\s+", diagnosis) if x]) > 2:
+        raise RuntimeError("Hermes ai_diagnosis must contain at most two sentences")
     placeholders = {"...", "CODE", "DIAGNOSIS", "ACTION", "PLACEHOLDER", "N/A", "UNKNOWN", "TBD"}
     for field in fields:
         value = str(insight.get(field, "")).strip()
