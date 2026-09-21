@@ -29,7 +29,7 @@ WITH base AS (
         r.model_spread,
         r.model_spread_pct_p50,
         r.forecast_shortfall
-    FROM dwh_prod.v_ai_region_monthly_diagnostics_v2 r
+    FROM dwh_prod.v_ai_region_monthly_insight_v2 r
 ), aggregated AS (
     SELECT
         periode,
