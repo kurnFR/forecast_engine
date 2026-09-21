@@ -93,8 +93,8 @@ WITH active_hierarchy AS (
 )
 SELECT
     a.periode,
-    a.gm_code,
-    a.gm_name,
+    a.gm_code::varchar(50) AS gm_code,
+    a.gm_name::varchar(150) AS gm_name,
     a.region_count,
     a.target_sellin,
     a.total_sellin,
