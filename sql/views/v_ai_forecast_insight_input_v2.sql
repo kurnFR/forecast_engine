@@ -22,6 +22,7 @@ SELECT
     r.regionname AS entity_name,
     r.target_sellin,
     r.total_sellin AS mtd_actual,
+    ROUND(r.total_sellin / NULLIF(r.target_sellin, 0) * 100, 2) AS mtd_achievement_pct,
     r.forecast_p10,
     r.forecast_p50,
     r.forecast_p90,
@@ -47,7 +48,6 @@ SELECT
     wc.total_working_days,
     wc.mtd_working_days,
     wc.remaining_working_days,
-    ROUND(r.total_sellin / NULLIF(r.target_sellin, 0) * 100, 2) AS mtd_achievement_pct,
     CASE
         WHEN r.performance_scenario IN ('AT_RISK', 'HIGH_RISK', 'CRITICAL') THEN TRUE
         WHEN r.performance_scenario IN ('TARGET_ACHIEVED', 'NEAR_TARGET', 'NO_FORECAST_DATA') THEN FALSE
@@ -65,6 +65,7 @@ SELECT
     g.gm_name AS entity_name,
     g.target_sellin,
     g.total_sellin AS mtd_actual,
+    ROUND(g.total_sellin / NULLIF(g.target_sellin, 0) * 100, 2) AS mtd_achievement_pct,
     g.forecast_p10,
     g.forecast_p50,
     g.forecast_p90,
@@ -90,7 +91,6 @@ SELECT
     wc.total_working_days,
     wc.mtd_working_days,
     wc.remaining_working_days,
-    ROUND(g.total_sellin / NULLIF(g.target_sellin, 0) * 100, 2) AS mtd_achievement_pct,
     CASE
         WHEN g.performance_scenario IN ('AT_RISK', 'HIGH_RISK', 'CRITICAL') THEN TRUE
         WHEN g.performance_scenario IN ('TARGET_ACHIEVED', 'NEAR_TARGET', 'NO_FORECAST_DATA') THEN FALSE
@@ -108,6 +108,7 @@ SELECT
     'CEO'::text AS entity_name,
     c.target_sellin,
     c.total_sellin AS mtd_actual,
+    ROUND(c.total_sellin / NULLIF(c.target_sellin, 0) * 100, 2) AS mtd_achievement_pct,
     c.forecast_p10,
     c.forecast_p50,
     c.forecast_p90,
@@ -133,7 +134,6 @@ SELECT
     wc.total_working_days,
     wc.mtd_working_days,
     wc.remaining_working_days,
-    ROUND(c.total_sellin / NULLIF(c.target_sellin, 0) * 100, 2) AS mtd_achievement_pct,
     CASE
         WHEN c.performance_scenario IN ('AT_RISK', 'HIGH_RISK', 'CRITICAL') THEN TRUE
         WHEN c.performance_scenario IN ('TARGET_ACHIEVED', 'NEAR_TARGET', 'NO_FORECAST_DATA') THEN FALSE
