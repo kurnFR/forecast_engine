@@ -278,19 +278,32 @@ def _validate_narrative_text(insight: dict[str, Any]) -> None:
 def _parse_narrative_number(token: str) -> float:
     """Parse Indonesian-style numeric text into a comparable numeric value."""
     value = token.strip().replace(" ", "")
-    if "," in value and "." in value:
-        if value.rfind(",") > value.rfind("."):
-            value = value.replace(".", "").replace(",", ".")
-        else:
-            value = value.replace(",", "")
-    elif "," in value:
-        value = value.replace(",", ".")
-    elif value.count(".") > 1:
-        value = value.replace(".", "")
-    elif "." in value:
-        left, right = value.split(".", 1)
-        if len(right) == 3 and left.isdigit():
+    if not value:
+        raise ValueError("empty narrative number")
+
+    if "," in value:
+        # Indonesian decimal comma; dots are thousands separators.
+        if "." in value:
             value = value.replace(".", "")
+        value = value.replace(",", ".", 1)
+        if "," in value:
+            value = value.replace(",", "")
+        return float(value)
+
+    if "." in value:
+        parts = value.split(".")
+        if all(part.isdigit() for part in parts):
+            # Conventional thousands grouping: 1.234 or 12.345.678
+            if all(len(part) == 3 for part in parts[1:]):
+                return float("".join(parts))
+            # Hermes can emit mixed grouping such as 19.847.898.43.
+            # Treat a final short group as the decimal fraction.
+            if len(parts[-1]) in (1, 2) and all(
+                len(part) == 3 for part in parts[1:-1]
+            ):
+                return float("".join(parts[:-1]) + "." + parts[-1])
+        return float(value)
+
     return float(value)
 
 
