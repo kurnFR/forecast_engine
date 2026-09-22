@@ -368,9 +368,12 @@ def _parse_narrative_number(token: str) -> float:
         raise ValueError("empty narrative number")
 
     if "," in value:
-        # Indonesian decimal comma; dots are thousands separators.
+        # Treat the final separator as the decimal separator. This deliberately
+        # tolerates mixed Hermes formatting such as 14.69,5.
         if "." in value:
-            value = value.replace(".", "")
+            before, after = value.rsplit(",", 1)
+            before = re.sub(r"[.,]", "", before)
+            return float(f"{before}.{after}")
         value = value.replace(",", ".", 1)
         if "," in value:
             value = value.replace(",", "")
@@ -379,11 +382,8 @@ def _parse_narrative_number(token: str) -> float:
     if "." in value:
         parts = value.split(".")
         if all(part.isdigit() for part in parts):
-            # Conventional thousands grouping: 1.234 or 12.345.678
             if all(len(part) == 3 for part in parts[1:]):
                 return float("".join(parts))
-            # Hermes can emit mixed grouping such as 19.847.898.43.
-            # Treat a final short group as the decimal fraction.
             if len(parts[-1]) in (1, 2) and all(
                 len(part) == 3 for part in parts[1:-1]
             ):
@@ -465,6 +465,13 @@ def _validate_narrative_numbers(row: dict[str, Any], insight: dict[str, Any]) ->
         if prefix == "P" and token in {"10", "50", "90"}:
             continue
         number = _parse_narrative_number(token)
+        # Bare small integers are commonly emitted as sentence/list markers
+        # or grammatical counts by the language model. They are not accepted
+        # as business facts elsewhere in the prompt, so do not let them block
+        # an otherwise grounded narrative. Monetary values and percentages are
+        # still validated strictly above.
+        if number in {1, 2, 3} and re.fullmatch(r"[123]", token):
+            continue
         tolerance = max(abs(number) * 0.015, 0.01)
         if not any(abs(number - source) <= tolerance for source in allowed):
             raise RuntimeError(f"Hermes used unsupported numeric value: {token}")
