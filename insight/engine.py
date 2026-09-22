@@ -425,9 +425,9 @@ class InsightAgent:
         for row in self.rows:
             support = []
             if row["hierarchy_level"] == "CEO":
-                support = regions + gms
+                support = []
             elif row["hierarchy_level"] == "GM":
-                support = [r for r in regions if r.get("entity_code") == row.get("largest_shortfall_regioncode")]
+                support = []
             prompt = build_prompt(row, support)
             insight = None
             last_err = None
