@@ -1,0 +1,28 @@
+# Model Governance
+
+## Candidate Models
+
+1. Historical Baseline
+2. ETS
+3. SARIMA
+4. XGBoost
+
+## Selection Logic
+
+Lowest leakage-safe WAPE wins.
+
+## Monitoring KPIs
+
+- WAPE
+- MAE
+- RMSE
+- Bias
+- Interval Coverage
+- Interval Width
+
+## Retraining Expectations
+
+Monthly:
+- Refresh feature history
+- Recalculate candidate performance
+- Rebuild residual pools
