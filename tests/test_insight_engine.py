@@ -240,3 +240,12 @@ def test_validation_accepts_single_fact_anchored_action():
     insight = valid_insight(row)
     insight["triggered_action_plan"] = "Pantau gap proyeksi sebesar Rp 3,03 miliar selama sisa hari kerja."
     assert validate(row, insight) == insight
+
+
+def test_prompt_hardens_gm_identity_and_monetary_magnitude():
+    row = base("GM")
+    prompt = build_prompt(row)
+    assert "Copy it exactly as supplied: GM-COMJAWA" in prompt
+    assert "Never replace a GM identity with CEO" in prompt
+    assert "Never scale a value by 1,000 or 1,000,000" in prompt
+    assert "a source value of Rp7,246,690,000 must not become Rp7,246.69 miliar" in prompt
