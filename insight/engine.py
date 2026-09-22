@@ -100,8 +100,8 @@ You are an interpreter, NOT a calculator.
 
 HARD RULES:
 - Use only supplied facts.
-- Do not introduce counts, quantities, ordinals, dates, or other numbers that are not explicitly present in the authoritative input.
-- Do not state how many regions, GMs, contributors, entities, factors, actions, or priorities there are. Do not write numeric list/count language such as "2 wilayah", "1 GM", "3 faktor", or similar unless that exact count is an authoritative field for the current row.
+- Do not introduce counts, quantities, ordinals, dates, sentence counts, list counts, or other numbers that are not explicitly present in the authoritative input.
+- Do not state how many regions, GMs, contributors, entities, factors, actions, priorities, sentences, or other structural items there are. Do not write numeric list/count language such as "2 wilayah", "1 GM", "3 faktor", "2 kalimat", or similar unless that exact count is an authoritative field for the current row.
 - Monetary unit conversion must preserve the exact source magnitude: divide by 1,000,000,000 for miliar or 1,000,000 for juta only when that produces the same supplied value. Never scale a value by 1,000 or 1,000,000 to make it sound more executive.
 - You MAY reproduce supplied numeric facts in executive Indonesian prose and format them for readability
   (for example decimal comma, percentage sign, and Rp/miliar/billion notation), but you MUST NOT calculate,
@@ -151,6 +151,7 @@ FIELD RULES:
 - Numeric formatting may convert decimal points to Indonesian decimal commas and express supplied monetary values as Rp juta/miliar, but no arithmetic is permitted. The displayed amount must remain the same source value after unit conversion; e.g. a source value of Rp7,246,690,000 must not become Rp7,246.69 miliar. For a negative forecast gap, describe the supplied shortfall direction as "di bawah target" and do not print a minus sign before the monetary amount. For executive prose, prefer Rp X,XX miliar for supplied values at or above Rp1 miliar instead of raw integer formatting.
 - triggered_action_plan: exactly ONE short Indonesian management action, expressed as ONE sentence, supported by the facts. Base the action only on supplied forecast gap, working-day, focus/category, priority, and named shortfall-contributor facts. When a forecast gap is supplied, state its supplied monetary amount when practical; do not replace it with a generic phrase such as "menutup gap proyeksi". The action is a management response to the supplied facts, NOT a calculated sales-rate prescription.
 - The action should explicitly anchor itself to at least one supplied fact using terms such as gap, target, forecast, realisasi, hari kerja, shortfall, or kesiapan data; avoid empty actions such as "lakukan evaluasi", "tingkatkan penjualan", or "optimalkan kinerja" without a supplied factual anchor.
+- Do not mention structural counts such as the number of sentences, regions, GMs, contributors, factors, or actions.
 - NEVER use "run rate", "mengejar run rate", "run-rate minimal", or any equivalent daily-rate/momentum prescription. Do not prescribe a calculated daily or period sales threshold. Do not use "realisasi harian" as a calculated forecasting mechanism.
 - Do not use "hari kerja pertama" unless that exact fact is explicitly supplied in the authoritative input. Do not add bracketed labels such as "[risiko tinggi]"; the controlled category already expresses the risk level.
 - Do not invent operational causes or levers such as pipeline, distribution, resource allocation, or target revision unless those facts are explicitly supplied.
@@ -546,7 +547,7 @@ class InsightAgent:
                     attempt,
                 )
                 try:
-                    raw = run_hermes(prompt)
+                    raw = run_hermes(prompt, attempts=1)
                     validation_started = time.monotonic()
                     insight = validate(row, raw)
                     logger.info(
@@ -569,7 +570,15 @@ class InsightAgent:
                         exc,
                     )
                     if attempt < 3:
-                        prompt += f"\n\nPREVIOUS ATTEMPT FAILED: {exc}\nFix the invalid field(s) and return the exact same JSON shape with real values. No placeholders."
+                        prompt += (
+                            f"\n\nPREVIOUS ATTEMPT FAILED: {exc}\n"
+                            "Fix the invalid field(s) and return the exact same JSON shape with real values. "
+                            "Use ONLY numeric values explicitly present in AUTHORITATIVE INPUT. "
+                            "Do not introduce any new number, count, ordinal, date, sentence count, or calculated amount. "
+                            "Do not mention the number of regions, GMs, contributors, factors, actions, or sentences. "
+                            "For monetary values, reproduce an authoritative value exactly or use its direct Rp juta/miliar representation; "
+                            "do not invent or recalculate the amount."
+                        )
                         logger.info(
                             "V2 insight row %s %s retry prompt_chars=%d; sleeping 3s",
                             row.get("hierarchy_level"),
