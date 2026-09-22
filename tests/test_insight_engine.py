@@ -181,3 +181,29 @@ def test_prompt_contains_no_v1_daily_rate_input_fields():
 def test_review_priority_is_normalized_to_uppercase():
     row = base(); row["priority"] = "review"; insight = valid_insight(row, priority="review")
     assert validate(row, insight)["priority"] == "REVIEW"
+
+def test_validation_rejects_forbidden_lexical_claim():
+    row = base()
+    insight = valid_insight(row)
+    insight["triggered_action_plan"] = "Lakukan pemantauan untuk memastikan penutupan gap."
+    with pytest.raises(RuntimeError, match="forbidden narrative phrase"):
+        validate(row, insight)
+
+
+def test_validation_rejects_unsupported_numeric_claim():
+    row = base()
+    insight = valid_insight(row)
+    insight["ai_diagnosis"] = "Pencapaian saat ini 30,29% dengan proyeksi 87,72%."
+    insight["triggered_action_plan"] = "Pantau gap sebesar Rp 9,99 miliar."
+    with pytest.raises(RuntimeError, match="unsupported numeric value"):
+        validate(row, insight)
+
+
+def test_validation_accepts_supported_numeric_claims():
+    row = base()
+    insight = valid_insight(row)
+    insight["ai_diagnosis"] = (
+        "Pencapaian saat ini 30,29% dengan proyeksi akhir bulan 87,72% dari target."
+    )
+    insight["triggered_action_plan"] = "Pantau gap proyeksi sebesar Rp 3,03 miliar."
+    assert validate(row, insight) == insight
