@@ -110,6 +110,8 @@ HARD RULES:
   achievement_pct_forecast, forecast_gap_to_target, uncertainty, performance_scenario,
   forecast_scenario, priority, shortfall, contribution, model spread, or working-day fields.
 - Never invent a business/root cause. Model disagreement is a signal only; do not explain why.
+- Do not use forbidden assurance language such as "memastikan", "menjamin", or "garansi". If an action needs urgency, use factual wording tied to the supplied gap, target, forecast, or working-day facts.
+- Do not write bare structural/count numerals such as "1", "2", or "3" in the narrative. Do not state counts of regions, GMs, contributors, factors, actions, sentences, or other structural items, even if the number feels obvious.
 - Do not attribute performance to operational causes (for example distribution, pipeline, stock, team execution, customer demand, promotion, or supply) unless that exact cause is supplied as an authoritative input fact.
 - Never use daily-rate or momentum forecasting logic.
 - {_period_context(row)}
