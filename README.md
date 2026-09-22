@@ -849,3 +849,33 @@ files.
    if material" rule.
 5. Consider per-row persistence so one flaky row doesn't block a full
    period's Region/GM/CEO insight refresh.
+
+
+   ## Quick Start
+
+pip install -r requirements.txt
+
+python main.py
+
+## Project Structure
+
+data/
+features/
+models/
+backtest/
+forecast/
+output/
+tests/
+
+## Example Output
+
+| Region | Month | P10 | P50 | P90 |
+|----------|----------|----------|----------|----------|
+
+## Monitoring
+
+Track:
+- WAPE
+- Bias
+- Coverage
+- Forecast Stability
