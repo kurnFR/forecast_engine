@@ -2,19 +2,8 @@
 -- One deterministic interface for Region, GM and CEO AI insight generation.
 -- AI consumes these facts and may explain/prioritize them, but must not alter
 -- target, actual, forecast, achievement, gap, scenario, or priority values.
--- Working-calendar fields are sourced from the existing region insight view;
--- no calendar logic is duplicated in Hermes.
 
 CREATE OR REPLACE VIEW dwh_prod.v_ai_forecast_insight_input_v2 AS
-WITH working_calendar AS (
-    SELECT
-        periode,
-        MAX(total_working_days) AS total_working_days,
-        MAX(mtd_working_days) AS mtd_working_days,
-        MAX(remaining_working_days) AS remaining_working_days
-    FROM dwh_prod.v_ai_region_monthly_insight_v2
-    GROUP BY periode
-)
 SELECT
     r.periode,
     'REGION'::text AS hierarchy_level,
@@ -45,16 +34,12 @@ SELECT
     NULL::text AS largest_shortfall_gm_name,
     NULL::numeric AS largest_gm_shortfall,
     NULL::numeric AS largest_gm_shortfall_pct,
-    wc.total_working_days,
-    wc.mtd_working_days,
-    wc.remaining_working_days,
     CASE
         WHEN r.performance_scenario IN ('AT_RISK', 'HIGH_RISK', 'CRITICAL') THEN TRUE
         WHEN r.performance_scenario IN ('TARGET_ACHIEVED', 'NEAR_TARGET', 'NO_FORECAST_DATA') THEN FALSE
         ELSE NULL
     END AS focus_required
 FROM dwh_prod.v_ai_region_monthly_insight_v2 r
-LEFT JOIN working_calendar wc ON wc.periode = r.periode
 
 UNION ALL
 
@@ -88,16 +73,12 @@ SELECT
     NULL::text AS largest_shortfall_gm_name,
     NULL::numeric AS largest_gm_shortfall,
     NULL::numeric AS largest_gm_shortfall_pct,
-    wc.total_working_days,
-    wc.mtd_working_days,
-    wc.remaining_working_days,
     CASE
         WHEN g.performance_scenario IN ('AT_RISK', 'HIGH_RISK', 'CRITICAL') THEN TRUE
         WHEN g.performance_scenario IN ('TARGET_ACHIEVED', 'NEAR_TARGET', 'NO_FORECAST_DATA') THEN FALSE
         ELSE NULL
     END AS focus_required
 FROM dwh_prod.v_ai_gm_monthly_diagnostics_v2 g
-LEFT JOIN working_calendar wc ON wc.periode = g.periode
 
 UNION ALL
 
@@ -131,13 +112,9 @@ SELECT
     c.largest_shortfall_gm_name,
     c.largest_gm_shortfall,
     c.largest_gm_shortfall_pct_ceo,
-    wc.total_working_days,
-    wc.mtd_working_days,
-    wc.remaining_working_days,
     CASE
         WHEN c.performance_scenario IN ('AT_RISK', 'HIGH_RISK', 'CRITICAL') THEN TRUE
         WHEN c.performance_scenario IN ('TARGET_ACHIEVED', 'NEAR_TARGET', 'NO_FORECAST_DATA') THEN FALSE
         ELSE NULL
     END AS focus_required
-FROM dwh_prod.v_ai_ceo_monthly_diagnostics_v2 c
-LEFT JOIN working_calendar wc ON wc.periode = c.periode;
+FROM dwh_prod.v_ai_ceo_monthly_diagnostics_v2 c;
