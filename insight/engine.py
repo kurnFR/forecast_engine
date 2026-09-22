@@ -113,6 +113,7 @@ NARRATIVE STYLE:
 - For executive monetary formatting, supplied values of Rp1 miliar or more should be expressed as "Rp X,XX miliar" when practical. Do not print full raw integer monetary values with Indonesian thousands separators when an executive miliar representation is possible.
 - State uncertainty/model spread factually only. Do not say uncertainty "memperkuat risiko", "menandakan risiko", or otherwise infer a causal or predictive interpretation unless that exact interpretation is explicitly supplied by the authoritative input.
 - Do not invent operational levers or actions such as coordinating teams, improving the forecast, changing resources, pipeline actions, distribution actions, or target revision unless those facts are explicitly supplied.
+- The action must be a single management response anchored to an explicit supplied fact (for example forecast gap, working days, shortfall contributor, forecast availability, or focus/category status); do not prescribe an invented operational mechanism or sales target.
 - Keep the narrative factual, concise, and similar in usefulness to the legacy management insight. Avoid generic phrases such as "sinyal risiko yang perlu diawasi" when a concrete gap and working-day fact are available.
 
 LEVEL: {level}
@@ -134,6 +135,7 @@ FIELD RULES:
 - ai_diagnosis: max 2 short Indonesian sentences; include supplied MTD achievement %, EOM forecast achievement %, and forecast gap when available. Include remaining working days when available and relevant. Do not invent causes.
 - Numeric formatting may convert decimal points to Indonesian decimal commas and express supplied monetary values as Rp juta/miliar, but no arithmetic is permitted. For a negative forecast gap, describe the supplied shortfall direction as "di bawah target" and do not print a minus sign before the monetary amount. For executive prose, prefer Rp X,XX miliar for supplied values at or above Rp1 miliar instead of raw integer formatting.
 - triggered_action_plan: exactly ONE short Indonesian management action, expressed as ONE sentence, supported by the facts. Base the action only on supplied forecast gap, working-day, focus/category, priority, and named shortfall-contributor facts. When a forecast gap is supplied, state its supplied monetary amount when practical; do not replace it with a generic phrase such as "menutup gap proyeksi". The action is a management response to the supplied facts, NOT a calculated sales-rate prescription.
+- The action should explicitly anchor itself to at least one supplied fact using terms such as gap, target, forecast, realisasi, hari kerja, shortfall, or kesiapan data; avoid empty actions such as "lakukan evaluasi", "tingkatkan penjualan", or "optimalkan kinerja" without a supplied factual anchor.
 - NEVER use "run rate", "mengejar run rate", "run-rate minimal", or any equivalent daily-rate/momentum prescription. Do not prescribe a calculated daily or period sales threshold. Do not use "realisasi harian" as a calculated forecasting mechanism.
 - Do not use "hari kerja pertama" unless that exact fact is explicitly supplied in the authoritative input. Do not add bracketed labels such as "[risiko tinggi]"; the controlled category already expresses the risk level.
 - Do not invent operational causes or levers such as pipeline, distribution, resource allocation, or target revision unless those facts are explicitly supplied.
@@ -214,6 +216,17 @@ FORBIDDEN_NARRATIVE_PATTERNS = (
     "akibat pelanggan",
     "akibat promosi",
     "akibat pasokan",
+    "tingkatkan penjualan",
+    "meningkatkan penjualan",
+    "optimalkan penjualan",
+    "optimalkan kinerja",
+    "tingkatkan kinerja",
+    "meningkatkan kinerja",
+    "kejar target",
+    "mengejar target",
+    "tingkatkan pencapaian",
+    "meningkatkan pencapaian",
+    "koordinasikan tim",
 )
 
 
@@ -235,6 +248,14 @@ def _validate_narrative_text(insight: dict[str, Any]) -> None:
     actions = [x for x in actions if x]
     if len(actions) != 1:
         raise RuntimeError("Hermes triggered_action_plan must contain exactly one action sentence")
+    action = actions[0].lower()
+    action_anchors = (
+        "gap", "target", "forecast", "proyeksi", "realisasi",
+        "hari kerja", "shortfall", "data forecast", "forecast tersedia",
+        "forecast belum tersedia", "focus required", "fokus",
+    )
+    if not any(anchor in action for anchor in action_anchors):
+        raise RuntimeError("Hermes triggered_action_plan lacks a factual anchor")
 
 
 
