@@ -154,7 +154,7 @@ FIELD RULES:
 - triggered_action_plan: exactly ONE short Indonesian management action, expressed as ONE sentence, supported by the facts. Base the action only on supplied forecast gap, working-day, focus/category, priority, and named shortfall-contributor facts. When a forecast gap is supplied, state its supplied monetary amount when practical; do not replace it with a generic phrase such as "menutup gap proyeksi". The action is a management response to the supplied facts, NOT a calculated sales-rate prescription.
 - The action should explicitly anchor itself to at least one supplied fact using terms such as gap, target, forecast, realisasi, hari kerja, shortfall, or kesiapan data; avoid empty actions such as "lakukan evaluasi", "tingkatkan penjualan", or "optimalkan kinerja" without a supplied factual anchor.
 - Do not mention structural counts such as the number of sentences, regions, GMs, contributors, factors, or actions.
-- NEVER use "run rate", "mengejar run rate", "run-rate minimal", or any equivalent daily-rate/momentum prescription. Do not prescribe a calculated daily or period sales threshold. Do not use "realisasi harian" as a calculated forecasting mechanism.
+- NEVER use "run rate", "mengejar run rate", "run-rate minimal", "memastikan", "menjamin", "garansi", "optimalkan", "tingkatkan", or any equivalent daily-rate/momentum/performance-guarantee prescription. Do not prescribe a calculated daily or period sales threshold. Do not use "realisasi harian" as a calculated forecasting mechanism.
 - Do not use "hari kerja pertama" unless that exact fact is explicitly supplied in the authoritative input. Do not add bracketed labels such as "[risiko tinggi]"; the controlled category already expresses the risk level.
 - Do not invent operational causes or levers such as pipeline, distribution, resource allocation, or target revision unless those facts are explicitly supplied.
 - For GM and CEO rows, do not infer or state the number of underlying regions or GMs from supporting context. Supporting context is for identifying the named contributor only.
@@ -293,6 +293,9 @@ FORBIDDEN_NARRATIVE_PATTERNS = (
     "koordinasikan tim",
     "memperbaiki proyeksi",
     "memastikan",
+    "memastikannya",
+    "memastikannya",
+    "memastikan bahwa",
     "menjamin",
     "garansi",
     "alokasi sumber daya",
@@ -586,7 +589,11 @@ class InsightAgent:
                             "Do not introduce any new number, count, ordinal, date, sentence count, or calculated amount. "
                             "Do not mention the number of regions, GMs, contributors, factors, actions, or sentences. "
                             "For monetary values, reproduce an authoritative value exactly or use its direct Rp juta/miliar representation; "
-                            "do not invent or recalculate the amount."
+                            "do not invent or recalculate the amount. "
+                            "NEVER use \"run rate\", \"mengejar run rate\", \"run-rate minimal\", \"memastikan\", \"menjamin\", \"garansi\", "
+                            "\"optimalkan\", \"tingkatkan\", or any equivalent daily-rate/momentum/performance-guarantee prescription. "
+                            "Do not prescribe a calculated daily or period sales threshold. "
+                            "Do not use \"realisasi harian\" as a calculated forecasting mechanism."
                         )
                         logger.info(
                             "V2 insight row %s %s retry prompt_chars=%d; sleeping 3s",

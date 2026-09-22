@@ -142,8 +142,8 @@ def persist(results: list[dict[str, Any]]) -> None:
                      :snapshot, :model, :prompt)
                 """), {
                     "p": period,
-                    "description": _json_dumps(insight),
+                    "description": _json_dumps(row),
                     "summary": f"{insight['ai_diagnosis']} {insight['triggered_action_plan']}",
-                    "snapshot": _json_dumps(row),
+                    "snapshot": _json_dumps(insight),
                     "model": "hermes-bi-insight", "prompt": "v2-forecast",
                 })
