@@ -276,18 +276,24 @@ def _validate_narrative_numbers(row: dict[str, Any], insight: dict[str, Any]) ->
     )
     percentages = re.compile(r"([0-9][0-9.,]*)\s*%")
 
-    for pattern in (monetary, percentages):
-        for match in pattern.finditer(text):
-            number = _parse_narrative_number(match.group(1))
-            unit = (match.group(2) or "").lower()
-            if unit == "miliar":
-                number *= 1_000_000_000
-            elif unit == "juta":
-                number *= 1_000_000
-            tolerance = max(abs(number) * 0.015, 0.01)
-            if not any(abs(number - source) <= tolerance for source in allowed):
-                raise RuntimeError(f"Hermes used unsupported numeric value: {match.group(0)}")
-            spans.append(match.span())
+    for match in monetary.finditer(text):
+        number = _parse_narrative_number(match.group(1))
+        unit = (match.group(2) or "").lower()
+        if unit == "miliar":
+            number *= 1_000_000_000
+        elif unit == "juta":
+            number *= 1_000_000
+        tolerance = max(abs(number) * 0.015, 0.01)
+        if not any(abs(number - source) <= tolerance for source in allowed):
+            raise RuntimeError(f"Hermes used unsupported numeric value: {match.group(0)}")
+        spans.append(match.span())
+
+    for match in percentages.finditer(text):
+        number = _parse_narrative_number(match.group(1))
+        tolerance = max(abs(number) * 0.015, 0.01)
+        if not any(abs(number - source) <= tolerance for source in allowed):
+            raise RuntimeError(f"Hermes used unsupported numeric value: {match.group(0)}")
+        spans.append(match.span())
 
     standalone = re.compile(r"(?<![A-Za-z0-9])([0-9][0-9.,]*)(?![A-Za-z0-9])")
     for match in standalone.finditer(text):
