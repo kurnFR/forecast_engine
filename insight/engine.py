@@ -96,6 +96,7 @@ HARD RULES:
   achievement_pct_forecast, forecast_gap_to_target, uncertainty, performance_scenario,
   forecast_scenario, priority, shortfall, contribution, model spread, or working-day fields.
 - Never invent a business/root cause. Model disagreement is a signal only; do not explain why.
+- Do not attribute performance to operational causes (for example distribution, pipeline, stock, team execution, customer demand, promotion, or supply) unless that exact cause is supplied as an authoritative input fact.
 - Never use daily-rate or momentum forecasting logic.
 - {_period_context(row)}
 - {_focus_context(row)}
@@ -191,6 +192,28 @@ FORBIDDEN_NARRATIVE_PATTERNS = (
     "alokasi sumber daya",
     "alokasi resource",
     "perubahan target",
+    "disebabkan oleh",
+    "disebabkan karena",
+    "karena distribusi",
+    "karena pipeline",
+    "karena stok",
+    "karena persediaan",
+    "karena tim",
+    "karena eksekusi",
+    "karena permintaan",
+    "karena pelanggan",
+    "karena promosi",
+    "karena pasokan",
+    "akibat distribusi",
+    "akibat pipeline",
+    "akibat stok",
+    "akibat persediaan",
+    "akibat tim",
+    "akibat eksekusi",
+    "akibat permintaan",
+    "akibat pelanggan",
+    "akibat promosi",
+    "akibat pasokan",
 )
 
 
@@ -201,6 +224,8 @@ def _validate_narrative_text(insight: dict[str, Any]) -> None:
     ).lower()
     for phrase in FORBIDDEN_NARRATIVE_PATTERNS:
         if phrase in text:
+            if phrase.startswith(("disebabkan", "karena ", "akibat ")):
+                raise RuntimeError(f"Hermes used unsupported causal claim: {phrase}")
             raise RuntimeError(f"Hermes used forbidden narrative phrase: {phrase}")
     if re.search(r"rp\s*-\s*[0-9]", text):
         raise RuntimeError("Hermes used a negative monetary amount in narrative")
