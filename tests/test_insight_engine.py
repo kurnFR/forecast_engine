@@ -207,3 +207,21 @@ def test_validation_accepts_supported_numeric_claims():
     )
     insight["triggered_action_plan"] = "Pantau gap proyeksi sebesar Rp 3,03 miliar."
     assert validate(row, insight) == insight
+
+
+def test_validation_rejects_invented_operational_cause():
+    row = base()
+    insight = valid_insight(row)
+    insight["ai_diagnosis"] = "Pencapaian tertinggal karena distribusi belum optimal."
+    with pytest.raises(RuntimeError, match="unsupported causal"):
+        validate(row, insight)
+
+
+def test_validation_accepts_fact_without_invented_cause():
+    row = base()
+    insight = valid_insight(row)
+    insight["ai_diagnosis"] = (
+        "Pencapaian saat ini 30,29% dengan proyeksi akhir bulan 87,72% dari target."
+    )
+    insight["triggered_action_plan"] = "Pantau gap proyeksi sebesar Rp 3,03 miliar."
+    assert validate(row, insight) == insight
