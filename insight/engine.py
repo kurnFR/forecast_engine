@@ -185,6 +185,12 @@ FORBIDDEN_NARRATIVE_PATTERNS = (
     "menandakan risiko",
     "koordinasikan tim",
     "memperbaiki proyeksi",
+    "memastikan",
+    "menjamin",
+    "garansi",
+    "alokasi sumber daya",
+    "alokasi resource",
+    "perubahan target",
 )
 
 
@@ -205,6 +211,96 @@ def _validate_narrative_text(insight: dict[str, Any]) -> None:
     if len(actions) != 1:
         raise RuntimeError("Hermes triggered_action_plan must contain exactly one action sentence")
 
+
+
+def _parse_narrative_number(token: str) -> float:
+    """Parse Indonesian-style numeric text into a comparable numeric value."""
+    value = token.strip().replace(" ", "")
+    if "," in value and "." in value:
+        if value.rfind(",") > value.rfind("."):
+            value = value.replace(".", "").replace(",", ".")
+        else:
+            value = value.replace(",", "")
+    elif "," in value:
+        value = value.replace(",", ".")
+    elif value.count(".") > 1:
+        value = value.replace(".", "")
+    elif "." in value:
+        left, right = value.split(".", 1)
+        if len(right) == 3 and left.isdigit():
+            value = value.replace(".", "")
+    return float(value)
+
+
+def _allowed_numeric_values(row: dict[str, Any]) -> list[float]:
+    """Return source-of-truth numeric values allowed in narrative text."""
+    fields = (
+        "target_sellin", "mtd_actual", "mtd_achievement_pct",
+        "forecast_p10", "forecast_p50", "forecast_p90",
+        "achievement_pct_forecast", "forecast_gap_to_target",
+        "forecast_uncertainty_pct", "model_spread", "model_spread_pct_p50",
+        "forecast_shortfall", "shortfall_contribution_pct",
+        "largest_region_shortfall", "largest_region_shortfall_pct",
+        "largest_gm_shortfall", "largest_gm_shortfall_pct",
+        "total_working_days", "mtd_working_days", "remaining_working_days",
+    )
+    values = []
+    for field in fields:
+        value = row.get(field)
+        if value is None:
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        values.append(number)
+        if abs(number) >= 1_000_000_000:
+            values.append(number / 1_000_000_000)
+        elif abs(number) >= 1_000_000:
+            values.append(number / 1_000_000)
+    return values
+
+
+def _validate_narrative_numbers(row: dict[str, Any], insight: dict[str, Any]) -> None:
+    """Reject numeric claims that cannot be traced to authoritative input."""
+    text = " ".join(
+        str(insight.get(field, ""))
+        for field in ("ai_diagnosis", "triggered_action_plan")
+    )
+    allowed = _allowed_numeric_values(row)
+    spans: list[tuple[int, int]] = []
+
+    monetary = re.compile(
+        r"Rp\s*([0-9][0-9.,]*)(?:\s*(miliar|juta))?",
+        re.IGNORECASE,
+    )
+    percentages = re.compile(r"([0-9][0-9.,]*)\s*%")
+
+    for pattern in (monetary, percentages):
+        for match in pattern.finditer(text):
+            number = _parse_narrative_number(match.group(1))
+            unit = (match.group(2) or "").lower()
+            if unit == "miliar":
+                number *= 1_000_000_000
+            elif unit == "juta":
+                number *= 1_000_000
+            tolerance = max(abs(number) * 0.015, 0.01)
+            if not any(abs(number - source) <= tolerance for source in allowed):
+                raise RuntimeError(f"Hermes used unsupported numeric value: {match.group(0)}")
+            spans.append(match.span())
+
+    standalone = re.compile(r"(?<![A-Za-z0-9])([0-9][0-9.,]*)(?![A-Za-z0-9])")
+    for match in standalone.finditer(text):
+        if any(match.start() >= start and match.end() <= end for start, end in spans):
+            continue
+        token = match.group(1)
+        prefix = text[max(0, match.start() - 1):match.start()].upper()
+        if prefix == "P" and token in {"10", "50", "90"}:
+            continue
+        number = _parse_narrative_number(token)
+        tolerance = max(abs(number) * 0.015, 0.01)
+        if not any(abs(number - source) <= tolerance for source in allowed):
+            raise RuntimeError(f"Hermes used unsupported numeric value: {token}")
 
 def validate(row: dict[str, Any], insight: dict[str, Any]) -> dict[str, Any]:
     level = row["hierarchy_level"]
@@ -232,6 +328,7 @@ def validate(row: dict[str, Any], insight: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError(f"Hermes returned invalid priority: {insight['priority']}")
     insight["priority"] = returned_priority
     _validate_narrative_text(insight)
+    _validate_narrative_numbers(row, insight)
     diagnosis = str(insight.get("ai_diagnosis", "")).strip()
     if len([x for x in re.split(r"(?<=[.!?])\s+", diagnosis) if x]) > 2:
         raise RuntimeError("Hermes ai_diagnosis must contain at most two sentences")
