@@ -79,7 +79,11 @@ def _focus_context(row: dict[str, Any]) -> str:
 
 def build_prompt(row: dict[str, Any], supporting: list[dict[str, Any]] | None = None) -> str:
     payload = json.dumps(_jsonable(row), ensure_ascii=False, separators=(",", ":"), default=str)
-    support = json.dumps([_jsonable(x) for x in (supporting or [])], ensure_ascii=False, separators=(",", ":"), default=str)
+    # Supporting rows are intentionally excluded from the prompt. GM/CEO rows already
+    # contain the authoritative largest-shortfall contributor fields, so passing all
+    # underlying rows only exposes unnecessary numbers and can trigger invented counts.
+    support = "[]"
+
     level = row["hierarchy_level"]
     identity = "entity_code" if level == "REGION" else "gm_code" if level == "GM" else "insight_level"
     identity_value = "CEO" if level == "CEO" else row.get(identity)
@@ -115,7 +119,7 @@ HARD RULES:
 
 NARRATIVE STYLE:
 - Preserve the concise executive style of the legacy BI insight.
-- The diagnosis should normally lead with the two key management numbers: MTD achievement and EOM forecast achievement.
+- The diagnosis should lead with the key management facts: MTD achievement and EOM forecast achievement.
 - When supplied, explicitly state the forecast gap and remaining working days.
 - Prefer this structure for normal forecasted rows:
   "Pencapaian saat ini sebesar X% dengan proyeksi akhir bulan di Y% dari target. Terdapat gap proyeksi sebesar Rp Z yang [management implication] [with remaining working days when supplied]."
