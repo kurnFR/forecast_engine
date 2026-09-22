@@ -176,19 +176,104 @@ def _extract_json(output: str) -> dict[str, Any]:
     return obj
 
 
+def _diagnostic_tail(value: Any, limit: int = 2000) -> str:
+    """Return a bounded diagnostic excerpt without flooding batch logs."""
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return f"...{text[-limit:]}"
+
+
+def _extract_session_id(value: Any) -> str | None:
+    match = re.search(r"session_id:\s*([A-Za-z0-9_-]+)", str(value or ""))
+    return match.group(1) if match else None
+
+
 def run_hermes(prompt: str, attempts: int = 2) -> dict[str, Any]:
-    last = None
+    last: Exception | None = None
     command = ["hermes", "chat", "--ignore-rules", "-q", prompt, "-Q"]
-    for attempt in range(attempts):
+    prompt_chars = len(prompt)
+    for attempt in range(1, attempts + 1):
+        started = time.monotonic()
+        logger.info(
+            "Hermes attempt %d/%d starting; prompt_chars=%d",
+            attempt,
+            attempts,
+            prompt_chars,
+        )
         try:
             result = subprocess.run(command, text=True, capture_output=True, timeout=180)
+            elapsed = time.monotonic() - started
+            session_id = _extract_session_id(result.stdout) or _extract_session_id(result.stderr)
+
             if result.returncode:
-                raise RuntimeError(result.stderr.strip() or "Hermes failed")
-            return _extract_json(result.stdout)
-        except (subprocess.TimeoutExpired, RuntimeError, json.JSONDecodeError) as exc:
+                diagnostics = _diagnostic_tail(result.stderr) or _diagnostic_tail(result.stdout) or "no Hermes diagnostics"
+                logger.error(
+                    "Hermes attempt %d/%d failed after %.1fs; returncode=%d; session_id=%s; diagnostics=%s",
+                    attempt,
+                    attempts,
+                    elapsed,
+                    result.returncode,
+                    session_id or "unknown",
+                    diagnostics,
+                )
+                raise RuntimeError(
+                    f"Hermes exited with code {result.returncode}; "
+                    f"session_id={session_id or 'unknown'}; diagnostics={diagnostics}"
+                )
+
+            try:
+                parsed = _extract_json(result.stdout)
+            except (RuntimeError, json.JSONDecodeError):
+                logger.error(
+                    "Hermes attempt %d/%d returned invalid JSON after %.1fs; session_id=%s; stdout=%s; stderr=%s",
+                    attempt,
+                    attempts,
+                    elapsed,
+                    session_id or "unknown",
+                    _diagnostic_tail(result.stdout),
+                    _diagnostic_tail(result.stderr),
+                )
+                raise
+
+            logger.info(
+                "Hermes attempt %d/%d succeeded in %.1fs; session_id=%s; stdout_chars=%d",
+                attempt,
+                attempts,
+                elapsed,
+                session_id or "unknown",
+                len(result.stdout or ""),
+            )
+            return parsed
+        except subprocess.TimeoutExpired as exc:
+            elapsed = time.monotonic() - started
+            stdout = getattr(exc, "stdout", None)
+            stderr = getattr(exc, "stderr", None)
+            session_id = _extract_session_id(stdout) or _extract_session_id(stderr)
+            logger.error(
+                "Hermes attempt %d/%d timed out after %.1fs; timeout=180s; session_id=%s; stdout=%s; stderr=%s",
+                attempt,
+                attempts,
+                elapsed,
+                session_id or "unknown",
+                _diagnostic_tail(stdout),
+                _diagnostic_tail(stderr),
+            )
+            last = RuntimeError(
+                f"Hermes timed out after 180s; session_id={session_id or 'unknown'}"
+            )
+        except (RuntimeError, json.JSONDecodeError) as exc:
             last = exc
-            if attempt + 1 < attempts:
-                time.sleep(5)
+            logger.warning(
+                "Hermes attempt %d/%d exception after %.1fs: %s",
+                attempt,
+                attempts,
+                time.monotonic() - started,
+                exc,
+            )
+        if attempt < attempts:
+            logger.info("Hermes retrying attempt %d/%d after 5s", attempt + 1, attempts)
+            time.sleep(5)
     raise RuntimeError(f"Hermes failed after {attempts} attempts: {last}")
 
 
@@ -444,15 +529,61 @@ class InsightAgent:
             prompt = build_prompt(row, support)
             insight = None
             last_err = None
-            for attempt in range(3):
+            row_id = row.get("entity_code", row.get("gm_code", "CEO"))
+            row_started = time.monotonic()
+            logger.info(
+                "V2 insight row starting: %s %s; prompt_chars=%d",
+                row.get("hierarchy_level"),
+                row_id,
+                len(prompt),
+            )
+            for attempt in range(1, 4):
+                attempt_started = time.monotonic()
+                logger.info(
+                    "V2 insight row %s %s generation attempt %d/3",
+                    row.get("hierarchy_level"),
+                    row_id,
+                    attempt,
+                )
                 try:
                     raw = run_hermes(prompt)
+                    validation_started = time.monotonic()
                     insight = validate(row, raw)
+                    logger.info(
+                        "V2 insight row %s %s attempt %d validated in %.1fs; total_attempt_time=%.1fs",
+                        row.get("hierarchy_level"),
+                        row_id,
+                        attempt,
+                        time.monotonic() - validation_started,
+                        time.monotonic() - attempt_started,
+                    )
                     break
                 except RuntimeError as exc:
                     last_err = exc
-                    prompt += f"\n\nPREVIOUS ATTEMPT FAILED: {exc}\nFix the invalid field(s) and return the exact same JSON shape with real values. No placeholders."
-                    time.sleep(3)
+                    logger.warning(
+                        "V2 insight row %s %s attempt %d failed after %.1fs: %s",
+                        row.get("hierarchy_level"),
+                        row_id,
+                        attempt,
+                        time.monotonic() - attempt_started,
+                        exc,
+                    )
+                    if attempt < 3:
+                        prompt += f"\n\nPREVIOUS ATTEMPT FAILED: {exc}\nFix the invalid field(s) and return the exact same JSON shape with real values. No placeholders."
+                        logger.info(
+                            "V2 insight row %s %s retry prompt_chars=%d; sleeping 3s",
+                            row.get("hierarchy_level"),
+                            row_id,
+                            len(prompt),
+                        )
+                        time.sleep(3)
+            logger.info(
+                "V2 insight row %s %s finished in %.1fs; success=%s",
+                row.get("hierarchy_level"),
+                row_id,
+                time.monotonic() - row_started,
+                insight is not None,
+            )
             if insight is None:
                 failure = {"input": row, "error": str(last_err)}
                 self.failures.append(failure)
