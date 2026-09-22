@@ -225,3 +225,18 @@ def test_validation_accepts_fact_without_invented_cause():
     )
     insight["triggered_action_plan"] = "Pantau gap proyeksi sebesar Rp 3,03 miliar."
     assert validate(row, insight) == insight
+
+
+def test_validation_rejects_unanchored_generic_action():
+    row = base()
+    insight = valid_insight(row)
+    insight["triggered_action_plan"] = "Tingkatkan kinerja penjualan."
+    with pytest.raises(RuntimeError, match="factual anchor|forbidden narrative phrase"):
+        validate(row, insight)
+
+
+def test_validation_accepts_single_fact_anchored_action():
+    row = base()
+    insight = valid_insight(row)
+    insight["triggered_action_plan"] = "Pantau gap proyeksi sebesar Rp 3,03 miliar selama sisa hari kerja."
+    assert validate(row, insight) == insight
