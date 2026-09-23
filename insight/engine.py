@@ -80,7 +80,7 @@ def _focus_context(row: dict[str, Any]) -> str:
 def build_prompt(row: dict[str, Any], supporting: list[dict[str, Any]] | None = None) -> str:
     payload = json.dumps(_jsonable(row), ensure_ascii=False, separators=(",", ":"), default=str)
     # Supporting rows are intentionally excluded from the prompt. GM/CEO rows already
-    # contain the authoritative largest-shortfall contributor fields, so passing all
+    # contain the authoritative largest-contributor kekurangan fields, so passing all
     # underlying rows only exposes unnecessary numbers and can trigger invented counts.
     support = "[]"
 
@@ -150,7 +150,7 @@ FIELD RULES:
 - ai_insight_category is a controlled classification, not a replacement for performance_scenario or forecast_scenario.
 - priority must exactly equal the supplied priority. Allowed values are LOW, MEDIUM, HIGH, CRITICAL, or REVIEW.
 - ai_diagnosis: max 2 short Indonesian sentences; include supplied MTD achievement %, EOM forecast achievement %, and forecast gap when available. Include remaining working days when available and relevant. Do not invent causes.
-- Numeric formatting may convert decimal points to Indonesian decimal commas and express supplied monetary values as Rp juta/miliar, but no arithmetic is permitted. The displayed amount must remain the same source value after unit conversion; e.g. a source value of Rp7,246,690,000 must not become Rp7,246.69 miliar. For a negative forecast gap, describe the supplied shortfall direction as "di bawah target" and do not print a minus sign before the monetary amount. For executive prose, prefer Rp X,XX miliar for supplied values at or above Rp1 miliar instead of raw integer formatting.
+- Numeric formatting may convert decimal points to Indonesian decimal commas and express supplied monetary values as Rp juta/miliar, but no arithmetic is permitted. The displayed amount must remain the same source value after unit conversion; e.g. a source value of Rp7,246,690,000 must not become Rp7,246.69 miliar. For a negative forecast gap, describe the supplied kekurangan direction as "di bawah target" and do not print a minus sign before the monetary amount. For executive prose, prefer Rp X,XX miliar for supplied values at or above Rp1 miliar instead of raw integer formatting.
 - triggered_action_plan: exactly ONE short Indonesian management action, expressed as ONE sentence, supported by the facts. Base the action only on supplied forecast gap, working-day, focus/category, priority, and named shortfall-contributor facts. When a forecast gap is supplied, state its supplied monetary amount when practical; do not replace it with a generic phrase such as "menutup gap proyeksi". The action is a management response to the supplied facts, NOT a calculated sales-rate prescription.
 - The action should explicitly anchor itself to at least one supplied fact using terms such as gap, target, forecast, realisasi, hari kerja, shortfall, or kesiapan data; avoid empty actions such as "lakukan evaluasi", "tingkatkan penjualan", or "optimalkan kinerja" without a supplied factual anchor.
 - Do not mention structural counts such as the number of sentences, regions, GMs, contributors, factors, or actions.
@@ -344,7 +344,7 @@ def _validate_narrative_text(insight: dict[str, Any]) -> None:
     ).lower()
     for phrase in FORBIDDEN_NARRATIVE_PATTERNS:
         if phrase in text:
-            if phrase.startswith(("disebabkan", "karena ", "akibat ")):
+            if phrase.startswith(("disebabkan", "dipengaruhi", "karena ", "akibat ")):
                 raise RuntimeError(f"Hermes used unsupported causal claim: {phrase}")
             raise RuntimeError(f"Hermes used forbidden narrative phrase: {phrase}")
     if re.search(r"rp\s*-\s*[0-9]", text):
@@ -358,7 +358,7 @@ def _validate_narrative_text(insight: dict[str, Any]) -> None:
     action = actions[0].lower()
     action_anchors = (
         "gap", "target", "forecast", "proyeksi", "realisasi",
-        "hari kerja", "shortfall", "data forecast", "forecast tersedia",
+        "hari kerja", "kekurangan", "data forecast", "forecast tersedia",
         "forecast belum tersedia", "focus required", "fokus",
     )
     if not any(anchor in action for anchor in action_anchors):
