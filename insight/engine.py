@@ -65,7 +65,7 @@ def _focus_context(row: dict[str, Any]) -> str:
     if focus is True:
         return (
             "Focus required = TRUE. Bahasa diagnosis dan aksi boleh menyatakan kebutuhan "
-            "focus or intervensi manajemen bila didukung oleh kategori dan fakta yang diberikan."
+            "fokus manajemen bila didukung oleh kategori dan fakta yang diberikan."
         )
     if focus is False:
         return (
@@ -117,6 +117,7 @@ HARD RULES:
 - {_period_context(row)}
 - {_focus_context(row)}
 - Diagnosis and action MUST be Indonesian and executive-ready.
+- Prefer fully Indonesian business terminology: use "proyeksi" instead of "forecast", "selisih" instead of "gap", and "kekurangan" instead of "shortfall" in narrative text. English field names in the JSON contract are allowed.
 - Return ONLY one JSON object, with exactly five fields.
 
 NARRATIVE STYLE:
@@ -124,7 +125,7 @@ NARRATIVE STYLE:
 - The diagnosis should lead with the key management facts: MTD achievement and EOM forecast achievement.
 - When supplied, explicitly state the forecast gap and remaining working days.
 - Prefer this structure for normal forecasted rows:
-  "Pencapaian saat ini sebesar X% dengan proyeksi akhir bulan di Y% dari target. Terdapat gap proyeksi sebesar Rp Z yang [management implication] [with remaining working days when supplied]."
+  "Pencapaian saat ini sebesar X% dengan proyeksi akhir bulan di Y% dari target. Terdapat selisih proyeksi sebesar Rp Z di bawah target [dengan sisa hari kerja bila relevan]."
 - The second sentence may mention uncertainty/model spread only when material and supplied, but it must not replace the core MTD + forecast + gap message.
 - For executive monetary formatting, supplied values of Rp1 miliar or more should be expressed as "Rp X,XX miliar" when practical. Do not print full raw integer monetary values with Indonesian thousands separators when an executive miliar representation is possible.
 - State uncertainty/model spread factually only. Do not say uncertainty "memperkuat risiko", "menandakan risiko", or otherwise infer a causal or predictive interpretation unless that exact interpretation is explicitly supplied by the authoritative input.
@@ -158,7 +159,7 @@ FIELD RULES:
 - Do not use "hari kerja pertama" unless that exact fact is explicitly supplied in the authoritative input. Do not add bracketed labels such as "[risiko tinggi]"; the controlled category already expresses the risk level.
 - Do not invent operational causes or levers such as pipeline, distribution, resource allocation, or target revision unless those facts are explicitly supplied.
 - For GM and CEO rows, do not infer or state the number of underlying regions or GMs from supporting context. Supporting context is for identifying the named contributor only.
-- For GM and CEO rows, when a named largest shortfall contributor is supplied, the diagnosis or action should identify that contributor explicitly; do not use only generic wording such as "wilayah kontributor shortfall terbesar".
+- For GM and CEO rows, when a named largest kekurangan contributor is supplied, the diagnosis or action should identify that contributor explicitly; do not use only generic wording such as "wilayah kontributor shortfall terbesar".
 - For NEAR_TARGET with focus_required=false, prefer proportional monitoring/maintenance language and avoid wording that implies the entity itself requires special management attention. Prefer wording such as "perkembangan realisasi perlu dipantau secara rutin" rather than describing the entity as a priority.
 - When describing urgency, use only supportable wording such as "segera" for categories/focus that warrant management attention; do not use unsupported wording such as "mendadak".
 - Do not claim or imply model confidence unless an explicit confidence field is supplied. Describe uncertainty or model disagreement only when those signals are provided.
@@ -301,6 +302,9 @@ FORBIDDEN_NARRATIVE_PATTERNS = (
     "alokasi sumber daya",
     "alokasi resource",
     "perubahan target",
+    "shortfall",
+    "gap proyeksi",
+    "gap forecast",
     "disebabkan oleh",
     "disebabkan karena",
     "karena distribusi",
