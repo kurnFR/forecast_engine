@@ -175,6 +175,17 @@ FIELD RULES:
 """.strip()
 
 
+def _normalize_insight_shape(insight: dict[str, Any], level: str) -> dict[str, Any]:
+    """Normalize a known legacy diagnosis key before strict V2 validation."""
+    if level == "CEO" and "ai_diagnosis" not in insight and "ai_insight" in insight:
+        legacy = insight.get("ai_insight")
+        if isinstance(legacy, str) and legacy.strip():
+            insight = dict(insight)
+            insight["ai_diagnosis"] = legacy.strip()
+            insight.pop("ai_insight", None)
+    return insight
+
+
 def _extract_json(output: str) -> dict[str, Any]:
     cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", " ", output or "")
     start = cleaned.find("{")
@@ -569,6 +580,7 @@ class InsightAgent:
                 )
                 try:
                     raw = run_hermes(prompt, attempts=1)
+                    raw = _normalize_insight_shape(raw, row["hierarchy_level"])
                     validation_started = time.monotonic()
                     insight = validate(row, raw)
                     logger.info(
