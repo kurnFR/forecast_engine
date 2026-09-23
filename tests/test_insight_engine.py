@@ -105,6 +105,15 @@ def test_validation_preserves_gm_identity_category_and_priority():
     row = base("GM"); insight = valid_insight(row); assert validate(row, insight) == insight
 
 
+def test_validation_normalizes_legacy_ceo_ai_insight_field():
+    row = base("CEO")
+    insight = valid_insight(row)
+    legacy = dict(insight)
+    legacy["ai_insight"] = legacy.pop("ai_diagnosis")
+    assert validate(row, legacy)["ai_diagnosis"] == "Forecast P50 berada di bawah target dan masih berisiko."
+    assert "ai_insight" not in legacy
+
+
 def test_validation_preserves_ceo_identity_category_and_priority():
     row = base("CEO"); insight = valid_insight(row); assert validate(row, insight) == insight
 
