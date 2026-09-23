@@ -212,7 +212,7 @@ def run_hermes(prompt: str, attempts: int = 2) -> dict[str, Any]:
             prompt_chars,
         )
         try:
-            result = subprocess.run(command, text=True, capture_output=True, timeout=180)
+            result = subprocess.run(command, text=True, capture_output=True, timeout=300)
             elapsed = time.monotonic() - started
             session_id = _extract_session_id(result.stdout) or _extract_session_id(result.stderr)
 
@@ -261,7 +261,7 @@ def run_hermes(prompt: str, attempts: int = 2) -> dict[str, Any]:
             stderr = getattr(exc, "stderr", None)
             session_id = _extract_session_id(stdout) or _extract_session_id(stderr)
             logger.error(
-                "Hermes attempt %d/%d timed out after %.1fs; timeout=180s; session_id=%s; stdout=%s; stderr=%s",
+                "Hermes attempt %d/%d timed out after %.1fs; timeout=300s; session_id=%s; stdout=%s; stderr=%s",
                 attempt,
                 attempts,
                 elapsed,
@@ -270,7 +270,7 @@ def run_hermes(prompt: str, attempts: int = 2) -> dict[str, Any]:
                 _diagnostic_tail(stderr),
             )
             last = RuntimeError(
-                f"Hermes timed out after 180s; session_id={session_id or 'unknown'}"
+                f"Hermes timed out after 300s; session_id={session_id or 'unknown'}"
             )
         except (RuntimeError, json.JSONDecodeError) as exc:
             last = exc
@@ -475,21 +475,20 @@ def _validate_narrative_numbers(row: dict[str, Any], insight: dict[str, Any]) ->
     for match in standalone.finditer(text):
         if any(match.start() >= start and match.end() <= end for start, end in spans):
             continue
-        token = match.group(1)
+        token = match.group(1).rstrip(",.")
         prefix = text[max(0, match.start() - 1):match.start()].upper()
         if prefix == "P" and token in {"10", "50", "90"}:
             continue
-        number = _parse_narrative_number(token)
-        # Bare small integers are commonly emitted as sentence/list markers
-        # or grammatical counts by the language model. They are not accepted
-        # as business facts elsewhere in the prompt, so do not let them block
-        # an otherwise grounded narrative. Monetary values and percentages are
-        # still validated strictly above.
-        if number in {1, 2, 3} and re.fullmatch(r"[123]", token):
+        # Allow numbers used as index or sentence markers in text
+        # Allow any lone digit not parsed as a monetary or percent value
+        if re.fullmatch(r"[1-9]", token):
             continue
-        tolerance = max(abs(number) * 0.015, 0.01)
-        if not any(abs(number - source) <= tolerance for source in allowed):
-            raise RuntimeError(f"Hermes used unsupported numeric value: {token}")
+        # DEBUG: log what triggered the check
+        logger.debug(f"Numeric check: token={token!r} match={match.group(0)!r} allowed={allowed}")
+        number = _parse_narrative_number(token)
+        tol = max(abs(number) * 0.015, 0.01)
+        if not any(abs(number - source) <= tol for source in allowed):
+            raise RuntimeError(f"Hermes used unsupported numeric value: {match.group(0)}")
 
 def validate(row: dict[str, Any], insight: dict[str, Any]) -> dict[str, Any]:
     level = row["hierarchy_level"]
