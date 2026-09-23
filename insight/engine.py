@@ -121,17 +121,23 @@ HARD RULES:
 - Return ONLY one JSON object, with exactly five fields.
 
 NARRATIVE STYLE:
-- Preserve the concise executive style of the legacy BI insight.
-- The diagnosis should lead with the key management facts: MTD achievement and EOM forecast achievement.
-- When supplied, explicitly state the forecast gap and remaining working days.
-- Prefer this structure for normal forecasted rows:
-  "Pencapaian saat ini sebesar X% dengan proyeksi akhir bulan di Y% dari target. Terdapat selisih proyeksi sebesar Rp Z di bawah target [dengan sisa hari kerja bila relevan]."
-- The second sentence may mention uncertainty/model spread only when material and supplied, but it must not replace the core MTD + forecast + gap message.
-- For executive monetary formatting, supplied values of Rp1 miliar or more should be expressed as "Rp X,XX miliar" when practical. Do not print full raw integer monetary values with Indonesian thousands separators when an executive miliar representation is possible.
-- State uncertainty/model spread factually only. Do not say uncertainty "memperkuat risiko", "menandakan risiko", or otherwise infer a causal or predictive interpretation unless that exact interpretation is explicitly supplied by the authoritative input.
-- Do not invent operational levers or actions such as coordinating teams, improving the forecast, changing resources, pipeline actions, distribution actions, or target revision unless those facts are explicitly supplied.
-- The action must be a single management response anchored to an explicit supplied fact (for example forecast gap, working days, shortfall contributor, forecast availability, or focus/category status); do not prescribe an invented operational mechanism or sales target.
-- Keep the narrative factual, concise, and similar in usefulness to the legacy management insight. Avoid generic phrases such as "sinyal risiko yang perlu diawasi" when a concrete gap and working-day fact are available.
+- Use the following safe wording patterns whenever they apply; do not improvise synonyms.
+- Normal forecasted diagnosis pattern:
+  "Pencapaian MTD sebesar X% dengan proyeksi akhir bulan di Y% dari target. Terdapat selisih proyeksi sebesar Rp Z miliar di bawah target."
+- X = mtd_achievement_pct only. Y = achievement_pct_forecast only. Z = absolute forecast_gap_to_target / 1,000,000,000 only.
+- Never print the negative sign for forecast_gap_to_target.
+- If a named largest contributor is supplied, append exactly: ", dengan kekurangan terbesar pada NAMA."
+- Never use the words "gap", "shortfall", or "forecast" in narrative text. The corresponding Indonesian terms are "selisih", "kekurangan", and "proyeksi".
+- For monetary formatting, convert the authoritative source amount directly to miliar. Example: 6,457,900,000 becomes "Rp 6,46 miliar". Never produce "Rp 6.457,90 miliar" or a raw large monetary integer.
+- Never write structural counts such as "1 wilayah", "2 wilayah", "1 GM", "2 GM", or "3 faktor".
+- For focus_required=true with a named contributor, use this action pattern:
+  "Prioritaskan fokus manajemen pada NAMA berdasarkan selisih proyeksi sebesar Rp Z miliar di bawah target."
+- For focus_required=true without a named contributor, use:
+  "Prioritaskan fokus manajemen pada selisih proyeksi sebesar Rp Z miliar di bawah target."
+- For focus_required=false, use only a factual monitoring/maintenance action; do not create intervention language.
+- For NO_FORECAST_DATA / REVIEW, use only data/proyeksi-readiness wording and do not manufacture business risk.
+- Do not mention uncertainty/model mechanics unless explicitly needed. Do not invent causes, operational levers, resource allocation, target changes, daily-rate logic, or sales prescriptions.
+- The action must be exactly one sentence and must be anchored to an authoritative fact.
 
 LEVEL: {level}
 AUTHORITATIVE INPUT:
