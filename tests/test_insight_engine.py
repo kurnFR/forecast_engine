@@ -54,8 +54,8 @@ def test_prompt_requires_controlled_category():
 def test_prompt_requires_numeric_legacy_style_narrative():
     prompt = build_prompt(base())
     assert "You MAY reproduce supplied numeric facts in executive Indonesian prose" in prompt
-    assert "Pencapaian saat ini sebesar X% dengan proyeksi akhir bulan di Y% dari target" in prompt
-    assert "Terdapat gap proyeksi sebesar Rp Z" in prompt
+    assert "Pencapaian MTD sebesar X% dengan proyeksi akhir bulan di Y% dari target" in prompt
+    assert "Terdapat selisih proyeksi sebesar Rp Z miliar di bawah target" in prompt
     assert "remaining working days" in prompt
     assert "include supplied MTD achievement %, EOM forecast achievement %, and forecast gap" in prompt
 
@@ -63,7 +63,7 @@ def test_prompt_requires_numeric_legacy_style_narrative():
 def test_prompt_requires_focus_proportional_language():
     prompt = build_prompt(base())
     assert "Focus required = TRUE" in prompt
-    assert "focus or intervensi manajemen" in prompt
+    assert "fokus manajemen bila didukung oleh kategori dan fakta yang diberikan" in prompt
 
 
 def test_near_target_without_focus_requires_monitoring_language():
@@ -185,7 +185,7 @@ def test_review_priority_is_normalized_to_uppercase():
 def test_validation_rejects_forbidden_lexical_claim():
     row = base()
     insight = valid_insight(row)
-    insight["triggered_action_plan"] = "Lakukan pemantauan untuk memastikan penutupan gap."
+    insight["triggered_action_plan"] = "Lakukan pemantauan untuk memastikan penutupan selisih."
     with pytest.raises(RuntimeError, match="forbidden narrative phrase"):
         validate(row, insight)
 
@@ -194,7 +194,7 @@ def test_validation_rejects_unsupported_numeric_claim():
     row = base()
     insight = valid_insight(row)
     insight["ai_diagnosis"] = "Pencapaian saat ini 30,29% dengan proyeksi 87,72%."
-    insight["triggered_action_plan"] = "Pantau gap sebesar Rp 9,99 miliar."
+    insight["triggered_action_plan"] = "Pantau selisih sebesar Rp 9,99 miliar."
     with pytest.raises(RuntimeError, match="unsupported numeric value"):
         validate(row, insight)
 
@@ -205,7 +205,7 @@ def test_validation_accepts_supported_numeric_claims():
     insight["ai_diagnosis"] = (
         "Pencapaian saat ini 30,29% dengan proyeksi akhir bulan 87,72% dari target."
     )
-    insight["triggered_action_plan"] = "Pantau gap proyeksi sebesar Rp 3,03 miliar."
+    insight["triggered_action_plan"] = "Pantau selisih proyeksi sebesar Rp 3,03 miliar."
     assert validate(row, insight) == insight
 
 
@@ -238,7 +238,7 @@ def test_validation_rejects_unanchored_generic_action():
 def test_validation_accepts_single_fact_anchored_action():
     row = base()
     insight = valid_insight(row)
-    insight["triggered_action_plan"] = "Pantau gap proyeksi sebesar Rp 3,03 miliar selama sisa hari kerja."
+    insight["triggered_action_plan"] = "Pantau selisih proyeksi sebesar Rp 3,03 miliar selama sisa hari kerja."
     assert validate(row, insight) == insight
 
 
