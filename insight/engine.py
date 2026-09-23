@@ -175,14 +175,29 @@ FIELD RULES:
 """.strip()
 
 
-def _normalize_insight_shape(insight: dict[str, Any], level: str) -> dict[str, Any]:
-    """Normalize a known legacy diagnosis key before strict V2 validation."""
+def _normalize_insight_shape(
+    insight: dict[str, Any],
+    level: str,
+    row: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Normalize safe legacy/deterministic fields before strict V2 validation.
+
+    Hermes is responsible only for narrative text. Deterministic identity fields
+    come from the authoritative input and may be repaired when Hermes omits them
+    or returns null; a non-null wrong identity is still rejected by validation.
+    """
     if level == "CEO" and "ai_diagnosis" not in insight and "ai_insight" in insight:
         legacy = insight.get("ai_insight")
         if isinstance(legacy, str) and legacy.strip():
-            insight = dict(insight)
             insight["ai_diagnosis"] = legacy.strip()
             insight.pop("ai_insight", None)
+
+    if row is not None:
+        identity = "entity_code" if level == "REGION" else "gm_code" if level == "GM" else "insight_level"
+        expected = "CEO" if level == "CEO" else row.get("entity_code")
+        if insight.get(identity) is None and expected is not None:
+            insight[identity] = expected
+
     return insight
 
 
@@ -503,6 +518,7 @@ def _validate_narrative_numbers(row: dict[str, Any], insight: dict[str, Any]) ->
 
 def validate(row: dict[str, Any], insight: dict[str, Any]) -> dict[str, Any]:
     level = row["hierarchy_level"]
+    insight = _normalize_insight_shape(insight, level, row)
     fields = REQUIRED[level]
     missing = [f for f in fields if f not in insight]
     extra = [f for f in insight if f not in fields]
@@ -580,7 +596,7 @@ class InsightAgent:
                 )
                 try:
                     raw = run_hermes(prompt, attempts=1)
-                    raw = _normalize_insight_shape(raw, row["hierarchy_level"])
+                    raw = _normalize_insight_shape(raw, row["hierarchy_level"], row)
                     validation_started = time.monotonic()
                     insight = validate(row, raw)
                     logger.info(
