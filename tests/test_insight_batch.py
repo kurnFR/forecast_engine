@@ -18,7 +18,7 @@ def test_generate_continues_after_row_failure(monkeypatch):
     monkeypatch.setattr(engine.time, "sleep", lambda _: None)
 
     def fake_run_hermes(prompt, attempts=2):
-        if 'LEVEL: REGION\nAUTHORITATIVE INPUT:\n{"hierarchy_level":"REGION","entity_code":"BAD"}' in prompt:
+        if 'LEVEL: REGION' in prompt and '"entity_code":"BAD"' in prompt:
             raise RuntimeError("forced row failure")
         return {"ok": True}
 
@@ -46,7 +46,7 @@ def test_generate_continues_after_row_failure(monkeypatch):
 
 def test_batch_persists_successes_then_surfaces_failures(monkeypatch):
     class FakeAgent:
-        failures = [{"input": {"hierarchy_level": "REGION", "entity_code": "BAD"}, "error": "forced"}]
+        failures = [{"input": {"hierarchy_level": "REGION", "entity_code": "BAD", "periode": "2026-09-01"}, "error": "forced"}]
 
         def __init__(self, period=None):
             pass
