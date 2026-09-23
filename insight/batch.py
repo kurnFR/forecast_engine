@@ -4,7 +4,7 @@ import argparse
 import logging
 
 from .engine import InsightAgent
-from .persistence import persist
+from .persistence import deactivate_failed, persist
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +17,9 @@ def run(period: str | None = None) -> list[dict]:
     if results:
         persist(results)
     if agent.failures:
+        # Never leave an older active snapshot looking current when the current
+        # authoritative row failed AI generation/validation.
+        deactivate_failed(agent.failures)
         failed = ", ".join(
             f"{x['input'].get('hierarchy_level')}:{x['input'].get('entity_code', x['input'].get('gm_code', 'CEO'))}"
             for x in agent.failures
