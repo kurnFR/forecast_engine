@@ -147,3 +147,42 @@ def persist(results: list[dict[str, Any]]) -> None:
                     "snapshot": _json_dumps(insight),
                     "model": "hermes-bi-insight", "prompt": "v2-forecast",
                 })
+
+
+def deactivate_failed(failures: list[dict[str, Any]]) -> None:
+    """Remove stale active snapshots for entities whose current generation failed.
+
+    A failed generation must never leave an older snapshot marked active, because
+    that row contains facts from an earlier forecast refresh and can be mistaken
+    for the current authoritative AI snapshot.
+    """
+    if not failures:
+        return
+
+    engine = get_engine()
+    with engine.begin() as conn:
+        for item in failures:
+            row = item["input"]
+            level = row["hierarchy_level"]
+            period = row["periode"]
+
+            if level == "REGION":
+                conn.execute(text("""
+                    UPDATE dwh_prod.ai_region_insight
+                    SET is_active = 0
+                    WHERE periode = :p AND regioncode = :c AND is_active = 1
+                """), {"p": period, "c": row["entity_code"]})
+
+            elif level == "GM":
+                conn.execute(text("""
+                    UPDATE dwh_prod.ai_gm_insight
+                    SET is_active = 0
+                    WHERE periode = :p AND gm_code = :c AND is_active = 1
+                """), {"p": period, "c": row["entity_code"]})
+
+            elif level == "CEO":
+                conn.execute(text("""
+                    UPDATE dwh_prod.ai_insight
+                    SET is_active = 0
+                    WHERE insight_type = 'CEO_SALES_SUMMARY' AND is_active = 1
+                """))
