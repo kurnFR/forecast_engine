@@ -194,7 +194,7 @@ def test_validation_rejects_unsupported_numeric_claim():
     row = base()
     insight = valid_insight(row)
     insight["ai_diagnosis"] = "Pencapaian saat ini 30,29% dengan proyeksi 87,72%."
-    insight["triggered_action_plan"] = "Pantau selisih sebesar Rp 9,99 miliar."
+    insight["triggered_action_plan"] = "Pantau selisih sebesar Rp 999,99 miliar."
     with pytest.raises(RuntimeError, match="unsupported numeric value"):
         validate(row, insight)
 
@@ -223,7 +223,7 @@ def test_validation_accepts_fact_without_invented_cause():
     insight["ai_diagnosis"] = (
         "Pencapaian saat ini 30,29% dengan proyeksi akhir bulan 87,72% dari target."
     )
-    insight["triggered_action_plan"] = "Pantau gap proyeksi sebesar Rp 3,03 miliar."
+    insight["triggered_action_plan"] = "Pantau selisih proyeksi sebesar Rp 3,03 miliar."
     assert validate(row, insight) == insight
 
 
