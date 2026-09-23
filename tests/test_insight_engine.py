@@ -104,6 +104,13 @@ def test_validation_preserves_region_identity_category_and_priority():
 def test_validation_preserves_gm_identity_category_and_priority():
     row = base("GM"); insight = valid_insight(row); assert validate(row, insight) == insight
 
+def test_validation_normalizes_missing_gm_identity_from_authoritative_input():
+    row = base("GM")
+    insight = valid_insight(row)
+    insight["gm_code"] = None
+    assert validate(row, insight)["gm_code"] == "GM-COMJAWA"
+
+
 
 def test_validation_normalizes_legacy_ceo_ai_insight_field():
     row = base("CEO")
