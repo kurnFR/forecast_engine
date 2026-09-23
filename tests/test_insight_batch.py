@@ -6,7 +6,7 @@ import insight.engine as engine
 
 def _rows():
     return [
-        {"hierarchy_level": "REGION", "entity_code": "BAD"},
+        {"hierarchy_level": "REGION", "entity_code": "BAD", "periode": "2026-09-01"},
         {"hierarchy_level": "REGION", "entity_code": "GOOD"},
         {"hierarchy_level": "GM", "entity_code": "GM-COMJAWA", "largest_shortfall_regioncode": "GOOD"},
         {"hierarchy_level": "CEO", "entity_code": "CEO"},
@@ -17,7 +17,7 @@ def test_generate_continues_after_row_failure(monkeypatch):
     monkeypatch.setattr(engine, "load_input", lambda period=None: _rows())
     monkeypatch.setattr(engine.time, "sleep", lambda _: None)
 
-    def fake_run_hermes(prompt):
+    def fake_run_hermes(prompt, attempts=2):
         if 'LEVEL: REGION\nAUTHORITATIVE INPUT:\n{"hierarchy_level":"REGION","entity_code":"BAD"}' in prompt:
             raise RuntimeError("forced row failure")
         return {"ok": True}
