@@ -13,6 +13,32 @@ def _rows():
     ]
 
 
+def test_current_month_period():
+    from datetime import date
+
+    today = date.today()
+    assert batch.current_month_period() == today.replace(day=1).isoformat()
+
+
+def test_run_defaults_to_current_month(monkeypatch):
+    calls = []
+
+    class FakeAgent:
+        failures = []
+
+        def __init__(self, period=None):
+            calls.append(period)
+
+        def generate(self, continue_on_error=False):
+            assert continue_on_error is True
+            return []
+
+    monkeypatch.setattr(batch, "InsightAgent", FakeAgent)
+
+    assert batch.run() == []
+    assert calls == [batch.current_month_period()]
+
+
 def test_generate_continues_after_row_failure(monkeypatch):
     monkeypatch.setattr(engine, "load_input", lambda period=None: _rows())
     monkeypatch.setattr(engine.time, "sleep", lambda _: None)
