@@ -15,8 +15,8 @@ CREATE OR REPLACE VIEW dwh_prod.v_ai_gm_monthly_diagnostics_v2 AS
 WITH active_hierarchy AS (
     SELECT
         regioncode,
-        MAX(gm_code) AS gm_code,
-        MAX(gm_name) AS gm_name
+        MAX(gm_code)::varchar(50) AS gm_code,
+        MAX(gm_name)::varchar(150) AS gm_name
     FROM dwh_prod.m_sales_org_hierarchy
     WHERE is_active = TRUE
     GROUP BY regioncode
@@ -53,7 +53,7 @@ WITH active_hierarchy AS (
             THEN (r.forecast_p90 - r.forecast_p10) / (2.0 * 1.2815515655446)
             ELSE NULL
         END AS regional_sigma
-    FROM dwh_prod.v_ai_region_monthly_diagnostics_v2 r
+    FROM dwh_prod.v_ai_region_monthly_insight_v2 r
     JOIN active_hierarchy h
       ON r.regioncode = h.regioncode
 ), aggregated AS (
@@ -93,8 +93,8 @@ WITH active_hierarchy AS (
 )
 SELECT
     a.periode,
-    a.gm_code,
-    a.gm_name,
+    a.gm_code::varchar(50) AS gm_code,
+    a.gm_name::varchar(150) AS gm_name,
     a.region_count,
     a.target_sellin,
     a.total_sellin,

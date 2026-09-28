@@ -1,1 +1,0 @@
-CI repair: CEO prompt identity assertion must match the prompt's default JSON serialization, which includes a space after the colon.

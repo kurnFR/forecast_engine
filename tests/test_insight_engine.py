@@ -54,8 +54,8 @@ def test_prompt_requires_controlled_category():
 def test_prompt_requires_numeric_legacy_style_narrative():
     prompt = build_prompt(base())
     assert "You MAY reproduce supplied numeric facts in executive Indonesian prose" in prompt
-    assert "Pencapaian saat ini sebesar X% dengan proyeksi akhir bulan di Y% dari target" in prompt
-    assert "Terdapat gap proyeksi sebesar Rp Z" in prompt
+    assert "Pencapaian MTD sebesar X% dengan proyeksi akhir bulan di Y% dari target" in prompt
+    assert "Terdapat selisih proyeksi sebesar Rp Z miliar di bawah target" in prompt
     assert "remaining working days" in prompt
     assert "include supplied MTD achievement %, EOM forecast achievement %, and forecast gap" in prompt
 
@@ -63,7 +63,7 @@ def test_prompt_requires_numeric_legacy_style_narrative():
 def test_prompt_requires_focus_proportional_language():
     prompt = build_prompt(base())
     assert "Focus required = TRUE" in prompt
-    assert "focus or intervensi manajemen" in prompt
+    assert "fokus manajemen bila didukung oleh kategori dan fakta yang diberikan" in prompt
 
 
 def test_near_target_without_focus_requires_monitoring_language():
@@ -103,6 +103,22 @@ def test_validation_preserves_region_identity_category_and_priority():
 
 def test_validation_preserves_gm_identity_category_and_priority():
     row = base("GM"); insight = valid_insight(row); assert validate(row, insight) == insight
+
+def test_validation_normalizes_missing_gm_identity_from_authoritative_input():
+    row = base("GM")
+    insight = valid_insight(row)
+    insight["gm_code"] = None
+    assert validate(row, insight)["gm_code"] == "GM-COMJAWA"
+
+
+
+def test_validation_normalizes_legacy_ceo_ai_insight_field():
+    row = base("CEO")
+    insight = valid_insight(row)
+    legacy = dict(insight)
+    legacy["ai_insight"] = legacy.pop("ai_diagnosis")
+    assert validate(row, legacy)["ai_diagnosis"] == "Forecast P50 berada di bawah target dan masih berisiko."
+    assert "ai_insight" not in legacy
 
 
 def test_validation_preserves_ceo_identity_category_and_priority():
@@ -181,3 +197,71 @@ def test_prompt_contains_no_v1_daily_rate_input_fields():
 def test_review_priority_is_normalized_to_uppercase():
     row = base(); row["priority"] = "review"; insight = valid_insight(row, priority="review")
     assert validate(row, insight)["priority"] == "REVIEW"
+
+def test_validation_rejects_forbidden_lexical_claim():
+    row = base()
+    insight = valid_insight(row)
+    insight["triggered_action_plan"] = "Lakukan pemantauan untuk memastikan penutupan selisih."
+    with pytest.raises(RuntimeError, match="forbidden narrative phrase"):
+        validate(row, insight)
+
+
+def test_validation_rejects_unsupported_numeric_claim():
+    row = base()
+    insight = valid_insight(row)
+    insight["ai_diagnosis"] = "Pencapaian saat ini 30,29% dengan proyeksi 87,72%."
+    insight["triggered_action_plan"] = "Pantau target selisih sebesar Rp 999,99 miliar."
+    with pytest.raises(RuntimeError, match="unsupported numeric value"):
+        validate(row, insight)
+
+
+def test_validation_accepts_supported_numeric_claims():
+    row = base()
+    insight = valid_insight(row)
+    insight["ai_diagnosis"] = (
+        "Pencapaian saat ini 30,29% dengan proyeksi akhir bulan 87,72% dari target."
+    )
+    insight["triggered_action_plan"] = "Pantau selisih proyeksi sebesar Rp 3,03 miliar."
+    assert validate(row, insight) == insight
+
+
+def test_validation_rejects_invented_operational_cause():
+    row = base()
+    insight = valid_insight(row)
+    insight["ai_diagnosis"] = "Pencapaian tertinggal karena distribusi belum optimal."
+    with pytest.raises(RuntimeError, match="unsupported causal"):
+        validate(row, insight)
+
+
+def test_validation_accepts_fact_without_invented_cause():
+    row = base()
+    insight = valid_insight(row)
+    insight["ai_diagnosis"] = (
+        "Pencapaian saat ini 30,29% dengan proyeksi akhir bulan 87,72% dari target."
+    )
+    insight["triggered_action_plan"] = "Pantau selisih proyeksi sebesar Rp 3,03 miliar."
+    assert validate(row, insight) == insight
+
+
+def test_validation_rejects_unanchored_generic_action():
+    row = base()
+    insight = valid_insight(row)
+    insight["triggered_action_plan"] = "Tingkatkan kinerja penjualan."
+    with pytest.raises(RuntimeError, match="factual anchor|forbidden narrative phrase"):
+        validate(row, insight)
+
+
+def test_validation_accepts_single_fact_anchored_action():
+    row = base()
+    insight = valid_insight(row)
+    insight["triggered_action_plan"] = "Pantau selisih proyeksi sebesar Rp 3,03 miliar selama sisa hari kerja."
+    assert validate(row, insight) == insight
+
+
+def test_prompt_hardens_gm_identity_and_monetary_magnitude():
+    row = base("GM")
+    prompt = build_prompt(row)
+    assert "Copy it exactly as supplied: GM-COMJAWA" in prompt
+    assert "Never replace a GM identity with CEO" in prompt
+    assert "Never scale a value by 1,000 or 1,000,000" in prompt
+    assert "a source value of Rp7,246,690,000 must not become Rp7,246.69 miliar" in prompt

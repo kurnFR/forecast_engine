@@ -11,6 +11,7 @@ from data.validation import validate_forecast_output
 from forecast.predict import run_prediction_pipeline
 from forecast.train import run_training_pipeline
 from output.postgres import write_forecast
+from insight.batch import run as run_insight_batch
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ def main():
     result = validate_forecast_output(result)
 
     month_label = result["periode"].iloc[0].strftime("%Y-%m") if not result.empty else "N/A"
+    period = result["periode"].iloc[0].strftime("%Y-%m-%d") if not result.empty else None
     logger.info("Generated %d validated region-month forecasts for %s.", len(result), month_label)
 
     if args.dry_run:
@@ -44,6 +46,13 @@ def main():
 
     logger.info("=== Forecast engine V2: writing to Postgres ===")
     write_forecast(result)
+    logger.info("Forecast write completed successfully.")
+
+    if period is not None:
+        logger.info("=== AI Insight V2: Region / GM / CEO ===")
+        insights = run_insight_batch(period)
+        logger.info("AI Insight V2 completed: %d narratives persisted for %s.", len(insights), period)
+
     logger.info("Done. %d region-month forecasts written for %s.", len(result), month_label)
 
 
