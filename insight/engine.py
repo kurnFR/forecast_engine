@@ -128,6 +128,7 @@ NARRATIVE STYLE:
 - Never print the negative sign for forecast_gap_to_target.
 - If a named largest contributor is supplied, append exactly: ", dengan kekurangan terbesar pada NAMA."
 - Never use the words "gap", "shortfall", or "forecast" in narrative text. The corresponding Indonesian terms are "selisih", "kekurangan", and "proyeksi".
+- P10, P50, and P90 are internal model terminology. NEVER mention them in ai_diagnosis or triggered_action_plan. Use only "proyeksi" for the business-facing forecast narrative.
 - For monetary formatting, convert the authoritative source amount directly to miliar. Example: 6,457,900,000 becomes "Rp 6,46 miliar". Never produce "Rp 6.457,90 miliar" or a raw large monetary integer.
 - Never write structural counts such as "1 wilayah", "2 wilayah", "1 GM", "2 GM", or "3 faktor".
 - For focus_required=true with a named contributor, use this action pattern:
@@ -337,6 +338,12 @@ FORBIDDEN_NARRATIVE_PATTERNS = (
     "shortfall",
     "gap proyeksi",
     "gap forecast",
+    "p10",
+    "p50",
+    "p90",
+    "disebut p10",
+    "disebut p50",
+    "disebut p90",
     "disebabkan oleh",
     "disebabkan karena",
     "karena distribusi",
