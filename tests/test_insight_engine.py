@@ -34,7 +34,7 @@ def valid_insight(row, identity=None, priority=None, category=None):
     expected = "CEO" if level == "CEO" else row[key]
     return {key: identity if identity is not None else expected,
             "ai_insight_category": category if category is not None else row["performance_scenario"],
-            "ai_diagnosis": "Forecast P50 berada di bawah target dan masih berisiko.",
+            "ai_diagnosis": "Proyeksi akhir bulan berada di bawah target dan masih berisiko.",
             "triggered_action_plan": "Pantau realisasi sell-in dan fokus pada percepatan eksekusi.",
             "priority": priority if priority is not None else row["priority"]}
 
@@ -117,7 +117,7 @@ def test_validation_normalizes_legacy_ceo_ai_insight_field():
     insight = valid_insight(row)
     legacy = dict(insight)
     legacy["ai_insight"] = legacy.pop("ai_diagnosis")
-    assert validate(row, legacy)["ai_diagnosis"] == "Forecast P50 berada di bawah target dan masih berisiko."
+    assert validate(row, legacy)["ai_diagnosis"] == "Proyeksi akhir bulan berada di bawah target dan masih berisiko."
     assert "ai_insight" not in legacy
 
 
@@ -197,6 +197,24 @@ def test_prompt_contains_no_v1_daily_rate_input_fields():
 def test_review_priority_is_normalized_to_uppercase():
     row = base(); row["priority"] = "review"; insight = valid_insight(row, priority="review")
     assert validate(row, insight)["priority"] == "REVIEW"
+
+def test_prompt_forbids_internal_model_terminology_in_business_narrative():
+    prompt = build_prompt(base())
+    assert "P10, P50, and P90 are internal model terminology" in prompt
+    assert "NEVER mention them in ai_diagnosis or triggered_action_plan" in prompt
+
+
+def test_validation_rejects_internal_model_terminology():
+    row = base()
+    for term in ("P10", "P50", "P90"):
+        insight = valid_insight(row)
+        insight["triggered_action_plan"] = (
+            f"Monitoring realisasi dan proyeksi {term} dilakukan rutin untuk mengantisipasi "
+            "selisih proyeksi sebesar Rp 3,03 miliar di bawah target."
+        )
+        with pytest.raises(RuntimeError, match="forbidden narrative phrase"):
+            validate(row, insight)
+
 
 def test_validation_rejects_forbidden_lexical_claim():
     row = base()
