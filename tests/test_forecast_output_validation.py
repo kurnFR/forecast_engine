@@ -10,14 +10,14 @@ def _valid_output():
             {
                 "regioncode": "ASWJWA1",
                 "periode": "2026-09-01",
-                "mtd_value": 7_481_451_991,
+                "mtd_value": 7_480,
                 "elapsed_working_days": 9,
                 "remaining_working_days": 17,
                 "total_working_days": 26,
-                "forecast_p10": 13_528_163_824.58,
-                "forecast_p50": 21_666_482_120.10,
-                "forecast_p90": 25_916_951_052.19,
-                "target_sellin": 24_700_000_000,
+                "forecast_p10": 13_528,
+                "forecast_p50": 21_666,
+                "forecast_p90": 25_916,
+                "target_sellin": 24_700,
                 "achievement_pct_forecast": 87.71855109352227,
             }
         ]
