@@ -30,6 +30,81 @@ def _json_dumps(value: Any) -> str:
     return json.dumps(_json_safe(value), ensure_ascii=False, allow_nan=False, default=str)
 
 
+
+def verify_region_persistence(results: list[dict[str, Any]]) -> None:
+    """Verify active REGION snapshots retain the authoritative MTD values."""
+    region_results = [
+        item for item in results
+        if item["input"]["hierarchy_level"] == "REGION"
+    ]
+    if not region_results:
+        return
+
+    expected = {
+        (str(item["input"]["entity_code"]), str(item["input"]["periode"])): item["input"]["mtd_actual"]
+        for item in region_results
+    }
+    periods = sorted({period for _, period in expected})
+    if len(periods) != 1:
+        raise RuntimeError(
+            f"AI persistence verification requires one period, got {periods}"
+        )
+    period = periods[0]
+
+    with get_engine().connect() as conn:
+        rows = conn.execute(text("""
+            SELECT regioncode, periode, total_sellin
+            FROM dwh_prod.ai_region_insight
+            WHERE periode = :p AND is_active = 1
+        """), {"p": period}).mappings().all()
+
+    actual = {(str(row["regioncode"]), str(row["periode"])): row["total_sellin"] for row in rows}
+    missing = sorted(set(expected) - set(actual))
+    if missing:
+        raise RuntimeError(
+            "AI persistence verification failed: missing active REGION snapshots "
+            + ", ".join(f"{code}/{p}" for code, p in missing)
+        )
+
+    for key, expected_value in expected.items():
+        actual_value = actual[key]
+        if expected_value is None and actual_value is None:
+            continue
+        if expected_value is None or actual_value is None:
+            raise RuntimeError(
+                f"AI persistence verification failed for {key[0]}/{key[1]}: "
+                "total_sellin mismatch"
+            )
+        if abs(float(expected_value) - float(actual_value)) > 0.0001:
+            raise RuntimeError(
+                f"AI persistence verification failed for {key[0]}/{key[1]}: "
+                f"expected total_sellin={expected_value}, actual={actual_value}"
+            )
+
+    # Also verify the active AI fact against the canonical forecast table. This
+    # catches a stale view/input mapping even when the AI snapshot itself exists.
+    with get_engine().connect() as conn:
+        mismatches = conn.execute(text("""
+            SELECT a.regioncode, a.periode, a.total_sellin, f.mtd_value
+            FROM dwh_prod.ai_region_insight a
+            JOIN dwh_prod.forecast_sellin_eom f
+              ON f.regioncode = a.regioncode
+             AND f.periode = a.periode
+            WHERE a.periode = :p
+              AND a.is_active = 1
+              AND a.total_sellin IS DISTINCT FROM f.mtd_value
+        """), {"p": period}).mappings().all()
+
+    if mismatches:
+        details = ", ".join(
+            f"{row['regioncode']}/{row['periode']} "
+            f"ai={row['total_sellin']} forecast={row['mtd_value']}"
+            for row in mismatches
+        )
+        raise RuntimeError(
+            f"AI persistence verification failed: canonical MTD mismatch: {details}"
+        )
+
 def persist(results: list[dict[str, Any]]) -> None:
     engine = get_engine()
     with engine.begin() as conn:
@@ -147,6 +222,8 @@ def persist(results: list[dict[str, Any]]) -> None:
                     "snapshot": _json_dumps(insight),
                     "model": "hermes-bi-insight", "prompt": "v2-forecast",
                 })
+
+    verify_region_persistence(results)
 
 
 def deactivate_failed(failures: list[dict[str, Any]]) -> None:
