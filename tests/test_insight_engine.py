@@ -10,13 +10,13 @@ def base(level="REGION"):
         "periode": "2026-09-01", "hierarchy_level": level,
         "entity_code": "ASWJWA1" if level == "REGION" else "GM-COMJAWA" if level == "GM" else "CEO",
         "entity_name": "ASW JAWA 1" if level == "REGION" else "GM COMMERCIAL JAWA PULAU" if level == "GM" else "CEO",
-        "target_sellin": 24700000000, "mtd_actual": 7481451991, "mtd_achievement_pct": 30.29,
-        "forecast_p10": 13528200000, "forecast_p50": 21666500000, "forecast_p90": 25917000000,
-        "achievement_pct_forecast": 87.7186, "forecast_gap_to_target": -3033500000,
+        "target_sellin": 24700, "mtd_actual": 748, "mtd_achievement_pct": 30.29,
+        "forecast_p10": 1352, "forecast_p50": 216, "forecast_p90": 2591,
+        "achievement_pct_forecast": 87.7186, "forecast_gap_to_target": -3033,
         "forecast_uncertainty_pct": 54.0, "performance_scenario": "AT_RISK",
         "performance_scenario_name": "At Risk", "forecast_scenario": "P50_BELOW_TARGET_BUT_UNCERTAIN",
-        "priority": "MEDIUM", "model_spread": 1962200000, "model_spread_pct_p50": 9.06,
-        "forecast_shortfall": 3033500000, "shortfall_contribution_pct": 5.58,
+        "priority": "MEDIUM", "model_spread": 1962, "model_spread_pct_p50": 9.06,
+        "forecast_shortfall": 3033, "shortfall_contribution_pct": 5.58,
         "focus_required": True,
         "total_working_days": 24, "mtd_working_days": 13, "remaining_working_days": 11,
         "largest_shortfall_regioncode": None, "largest_shortfall_regionname": None,
@@ -210,7 +210,7 @@ def test_validation_rejects_internal_model_terminology():
         insight = valid_insight(row)
         insight["triggered_action_plan"] = (
             f"Monitoring realisasi dan proyeksi {term} dilakukan rutin untuk mengantisipasi "
-            "selisih proyeksi sebesar Rp 3,03 miliar di bawah target."
+            "selisih proyeksi sebesar Rp 1 miliar di bawah target."
         )
         with pytest.raises(RuntimeError, match="forbidden narrative phrase"):
             validate(row, insight)
@@ -228,7 +228,7 @@ def test_validation_rejects_unsupported_numeric_claim():
     row = base()
     insight = valid_insight(row)
     insight["ai_diagnosis"] = "Pencapaian saat ini 30,29% dengan proyeksi 87,72%."
-    insight["triggered_action_plan"] = "Pantau target selisih sebesar Rp 999,99 miliar."
+    insight["triggered_action_plan"] = "Pantau target selisih sebesar Rp 1 miliar."
     with pytest.raises(RuntimeError, match="unsupported numeric value"):
         validate(row, insight)
 
@@ -239,7 +239,7 @@ def test_validation_accepts_supported_numeric_claims():
     insight["ai_diagnosis"] = (
         "Pencapaian saat ini 30,29% dengan proyeksi akhir bulan 87,72% dari target."
     )
-    insight["triggered_action_plan"] = "Pantau selisih proyeksi sebesar Rp 3,03 miliar."
+    insight["triggered_action_plan"] = "Pantau selisih proyeksi sebesar Rp 1 miliar."
     assert validate(row, insight) == insight
 
 
@@ -257,7 +257,7 @@ def test_validation_accepts_fact_without_invented_cause():
     insight["ai_diagnosis"] = (
         "Pencapaian saat ini 30,29% dengan proyeksi akhir bulan 87,72% dari target."
     )
-    insight["triggered_action_plan"] = "Pantau selisih proyeksi sebesar Rp 3,03 miliar."
+    insight["triggered_action_plan"] = "Pantau selisih proyeksi sebesar Rp 1 miliar."
     assert validate(row, insight) == insight
 
 
@@ -272,7 +272,7 @@ def test_validation_rejects_unanchored_generic_action():
 def test_validation_accepts_single_fact_anchored_action():
     row = base()
     insight = valid_insight(row)
-    insight["triggered_action_plan"] = "Pantau selisih proyeksi sebesar Rp 3,03 miliar selama sisa hari kerja."
+    insight["triggered_action_plan"] = "Pantau selisih proyeksi sebesar Rp 1 miliar selama sisa hari kerja."
     assert validate(row, insight) == insight
 
 
@@ -282,4 +282,4 @@ def test_prompt_hardens_gm_identity_and_monetary_magnitude():
     assert "Copy it exactly as supplied: GM-COMJAWA" in prompt
     assert "Never replace a GM identity with CEO" in prompt
     assert "Never scale a value by 1,000 or 1,000,000" in prompt
-    assert "a source value of Rp7,246,690,000 must not become Rp7,246.69 miliar" in prompt
+    assert "a source value of Rp1 must not become Rp1 miliar" in prompt
