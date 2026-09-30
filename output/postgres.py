@@ -79,6 +79,69 @@ def _normalize_for_postgres(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+
+def verify_forecast_persistence(df: pd.DataFrame) -> None:
+    """Verify the just-written forecast snapshot before AI insight generation.
+
+    The AI layer must never run against a forecast row that was not actually
+    persisted. This checks the exact region/period keys produced by the current
+    run and, critically, the MTD value that feeds downstream AI facts.
+    """
+    if df.empty:
+        return
+
+    expected = _normalize_for_postgres(df)[["regioncode", "periode", "mtd_value"]].copy()
+    expected["regioncode"] = expected["regioncode"].astype(str)
+    expected = expected.drop_duplicates(["regioncode", "periode"])
+
+    query = f"""
+        SELECT regioncode, periode, mtd_value
+        FROM {TABLE}
+        WHERE periode = :periode
+    """
+    period = expected["periode"].iloc[0]
+    actual = pd.read_sql(text(query), get_engine(), params={"periode": period})
+    actual["regioncode"] = actual["regioncode"].astype(str)
+
+    merged = expected.merge(
+        actual,
+        on=["regioncode", "periode"],
+        how="left",
+        suffixes=("_expected", "_actual"),
+        indicator=True,
+    )
+    missing = merged[merged["_merge"] != "both"]
+    if not missing.empty:
+        keys = ", ".join(
+            f"{row.regioncode}/{row.periode}" for row in missing.itertuples()
+        )
+        raise RuntimeError(
+            f"Forecast persistence verification failed: missing rows {keys}"
+        )
+
+    for row in merged.itertuples():
+        expected_value = row.mtd_value_expected
+        actual_value = row.mtd_value_actual
+        if pd.isna(expected_value) and pd.isna(actual_value):
+            continue
+        if pd.isna(expected_value) or pd.isna(actual_value):
+            raise RuntimeError(
+                f"Forecast persistence verification failed for "
+                f"{row.regioncode}/{row.periode}: mtd_value mismatch"
+            )
+        if abs(float(expected_value) - float(actual_value)) > 0.0001:
+            raise RuntimeError(
+                f"Forecast persistence verification failed for "
+                f"{row.regioncode}/{row.periode}: "
+                f"expected mtd_value={expected_value}, actual={actual_value}"
+            )
+
+    logger.info(
+        "Forecast persistence verified: %d region-month rows for %s.",
+        len(expected),
+        period,
+    )
+
 def write_forecast(df: pd.DataFrame) -> None:
     if df.empty:
         logger.warning("Forecast dataframe is empty - nothing written to %s.", TABLE)
@@ -105,3 +168,4 @@ def write_forecast(df: pd.DataFrame) -> None:
         conn.execute(text(upsert_sql))
 
     logger.info("Wrote %d region-month forecast rows to %s.", len(df), TABLE)
+    verify_forecast_persistence(df)
