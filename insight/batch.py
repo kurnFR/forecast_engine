@@ -6,10 +6,60 @@ from datetime import date
 import logging
 
 from .engine import InsightAgent
+from db import read_sql
 from .persistence import deactivate_failed, persist
 
 logger = logging.getLogger(__name__)
 
+
+
+def verify_ai_input_freshness(period: str) -> None:
+    """Ensure REGION AI inputs expose the same MTD values as the persisted forecast."""
+    query = """
+        SELECT
+            f.regioncode,
+            f.mtd_value AS forecast_mtd,
+            r.mtd_actual AS ai_mtd
+        FROM dwh_prod.forecast_sellin_eom f
+        LEFT JOIN dwh_prod.v_ai_forecast_insight_input_v2 r
+          ON r.entity_code = f.regioncode
+         AND r.periode = f.periode
+         AND r.hierarchy_level = 'REGION'
+        WHERE f.periode = :period
+        ORDER BY f.regioncode
+    """
+    rows = read_sql(query, {"period": period})
+    if rows.empty:
+        raise RuntimeError(
+            f"AI input freshness verification failed: no forecast rows for {period}"
+        )
+
+    missing = rows[rows["ai_mtd"].isna() & rows["forecast_mtd"].notna()]
+    if not missing.empty:
+        codes = ", ".join(missing["regioncode"].astype(str))
+        raise RuntimeError(
+            f"AI input freshness verification failed: missing REGION input rows: {codes}"
+        )
+
+    mismatched = rows[
+        rows["forecast_mtd"].notna()
+        & rows["ai_mtd"].notna()
+        & ((rows["forecast_mtd"].astype(float) - rows["ai_mtd"].astype(float)).abs() > 0.0001)
+    ]
+    if not mismatched.empty:
+        details = ", ".join(
+            f"{row.regioncode} forecast={row.forecast_mtd} ai={row.ai_mtd}"
+            for row in mismatched.itertuples()
+        )
+        raise RuntimeError(
+            f"AI input freshness verification failed: canonical MTD mismatch: {details}"
+        )
+
+    logger.info(
+        "AI input freshness verified: %d REGION rows for %s.",
+        len(rows),
+        period,
+    )
 
 def current_month_period() -> str:
     """Return the first day of the current calendar month as YYYY-MM-DD."""
@@ -20,6 +70,7 @@ def current_month_period() -> str:
 def run(period: str | None = None) -> list[dict]:
     period = period or current_month_period()
     logger.info("Running V2 insight batch for period %s.", period)
+    verify_ai_input_freshness(period)
 
     agent = InsightAgent(period)
     # Generate is ordered REGION, GM, CEO by the input view; CEO receives the
