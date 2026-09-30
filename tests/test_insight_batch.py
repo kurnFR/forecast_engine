@@ -34,6 +34,7 @@ def test_run_defaults_to_current_month(monkeypatch):
             return []
 
     monkeypatch.setattr(batch, "InsightAgent", FakeAgent)
+    monkeypatch.setattr(batch, "verify_ai_input_freshness", lambda period: None)
 
     assert batch.run() == []
     assert calls == [batch.current_month_period()]
@@ -83,6 +84,7 @@ def test_batch_persists_successes_then_surfaces_failures(monkeypatch):
 
     persisted = []
     monkeypatch.setattr(batch, "InsightAgent", FakeAgent)
+    monkeypatch.setattr(batch, "verify_ai_input_freshness", lambda period: None)
     monkeypatch.setattr(batch, "persist", lambda results: persisted.extend(results))
 
     with pytest.raises(RuntimeError, match="1 failed row"):
