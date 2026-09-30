@@ -707,7 +707,7 @@ already exists in the file.
 
 Hard constraint #2 in the prompt says *"Arithmetic FORBIDDEN: never
 recalculate, change, or invent any number."* Nothing in `validate()` checks
-this. If Hermes writes "Rp 4,1 miliar" in a diagnosis, there is currently no
+this. If Hermes writes "Rp 21 miliar" in a diagnosis, there is currently no
 code anywhere that confirms that figure corresponds to that row's actual
 `forecast_gap_to_target`. For a BI system whose entire value proposition is
 "numbers you can trust," a silently-wrong number in the narrative is a more
@@ -725,8 +725,8 @@ values, etc.). Reject and retry on a mismatch, same pattern as above.
 ### 🟡 Root cause of the inconsistent decimal precision visible in your sample
 
 Your sample alternates between `49,64%` / `92,18%` (2 decimals) and
-`24,1%` / `56,0%` (1 decimal), and between `Rp 4,1 miliar` (converted,
-1 decimal) and `Rp 32.189.392.984` / `Rp14.053.966.965` (raw digit-grouped,
+`24,1%` / `56,0%` (1 decimal), and between `Rp 2 miliar` (converted,
+1 decimal) and `Rp 32.1894` / `Rp14.053` (raw digit-grouped,
 no conversion, no space after "Rp" in one case). Traced this to two
 concrete, fixable causes rather than "the LLM being inconsistent":
 
@@ -746,8 +746,8 @@ concrete, fixable causes rather than "the LLM being inconsistent":
    mandate — and `run_hermes()` invokes a fresh subprocess per row with no
    shared context between calls. There's no mechanism that could make two
    separate Hermes invocations agree on a formatting convention even if
-   each one is internally consistent; row 8's `Rp 32.189.392.984` and row
-   1's `Rp 1,93 miliar` are two independently "valid" choices under the
+   each one is internally consistent; row 8's `Rp 32.189` and row
+   1's `Rp 1 miliar` are two independently "valid" choices under the
    current instructions.
 
 **Suggested fix for both, and the most robust option available**: stop
@@ -824,7 +824,7 @@ files.
   "get the numbers right."
 - Giving GM/CEO rows "supporting context" (their worst-shortfall region)
   and instructing the model to name it explicitly is visibly working in
-  your sample — rows 7 and 8 correctly name "ASW PULAU 1" and "ASW Sumatera
+  your sample — rows 7 and 8 correctly name "PULAU 1" and "Sumatera
   1" rather than staying generic. That's a real, useful executive-insight
   feature, not just decoration.
 - One thing worth remembering while reading GM/CEO narratives this engine
